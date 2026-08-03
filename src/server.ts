@@ -6,7 +6,16 @@ import { router } from './routes';
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+app.use(
+  cors({
+    origin: [
+      'https://pos-frontend-258.pages.dev',
+      'http://localhost:5173',
+    ],
+  })
+);
+
 app.use(express.json({ limit: '5mb' }));
 
 app.get('/', (_req, res) => {
@@ -16,6 +25,7 @@ app.get('/', (_req, res) => {
 app.use('/api', router);
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
+  console.log(`Servidor corriendo en puerto ${PORT}`);
 });
