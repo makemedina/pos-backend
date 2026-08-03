@@ -1,0 +1,291 @@
+import { prisma } from '../prisma';
+
+interface ItemCompraInput {
+  varianteId: string;
+  cantidad: number;   // kg
+  costoUnitario: number; // $ por kg en ESTA compra
+}
+
+interface CrearCompraInput {
+  proveedorId: string;
+  numeroFactura?: string;
+  fechaVencimiento?: Date;
+  items: ItemCompraInput[];
+  pagoInicial?: number;
+  metodoPagoInicial?: string;
+  registradoPorId?: string;
+}
+
+export class MontoPagoCompraInvalidoError extends Error {}
+
+/**
+ * Registra una compra a proveedor.
+ * Por cada item, crea un LOTE_INVENTARIO nuevo e independiente (no se mezcla
+ * con lotes anteriores de la misma variante, aunque el costo sea distinto).
+ * Actualiza el saldo pendiente de la compra (cuenta por pagar).
+ */
+export async function crearCompra(input: CrearCompraInput) {
+  const total = input.items.reduce(
+    (acc, item) => acc + item.cantidad * item.costoUnitario,
+    0
+  );
+  const pagoInicial = input.pagoInicial ?? 0;
+  const saldoPendiente = total - pagoInicial;
+
+  return prisma.$transaction(async (tx) => {
+    const compra = await tx.compra.create({
+      data: {
+        proveedorId: input.proveedorId,
+        numeroFactura: input.numeroFactura,
+        fechaVencimiento: input.fechaVencimiento,
+        total,
+        saldoPendiente,
+        estadoPago:
+          saldoPendiente <= 0 ? 'pagada' : pagoInicial > 0 ? 'parcial' : 'pendiente',
+      },
+    });
+
+    // Un lote nuevo por cada producto/variante comprado
+    for (const item of input.items) {
+      await tx.loteInventario.create({
+        data: {
+          varianteId: item.varianteId,
+          compraId: compra.id,
+          costoUnitario: item.costoUnitario,
+          cantidadInicial: item.cantidad,
+          cantidadDisponible: item.cantidad,
+        },
+      });
+    }
+
+    // Si hubo pago inicial, se registra como el primer abono
+    if (pagoInicial > 0) {
+      await tx.pagoCompra.create({
+        data: {
+          compraId: compra.id,
+          monto: pagoInicial,
+          metodoPago: input.metodoPagoInicial ?? 'efectivo',
+          registradoPorId: input.registradoPorId,
+        },
+      });
+    }
+
+    return compra;
+  });
+}
+
+/**
+ * Registra un pago (total o parcial) sobre una compra existente.
+ * Recalcula saldo pendiente y estado de pago. Guarda quien lo registro
+ * (tomado de la sesion, nunca del body) para el historial de abonos.
+ */
+export async function registrarPagoCompra(
+  compraId: string,
+  monto: number,
+  metodoPago: string,
+  registradoPorId: string
+) {
+  if (!monto || monto <= 0) {
+    throw new MontoPagoCompraInvalidoError('El monto del pago debe ser mayor a cero');
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const compra = await tx.compra.findUniqueOrThrow({ where: { id: compraId } });
+
+    const saldoActual = Number(compra.saldoPendiente);
+    if (monto > saldoActual) {
+      throw new MontoPagoCompraInvalidoError(
+        `El pago de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
+      );
+    }
+
+    await tx.pagoCompra.create({
+      data: { compraId, monto, metodoPago, registradoPorId },
+    });
+
+    const nuevoSaldo = saldoActual - monto;
+
+    return tx.compra.update({
+      where: { id: compraId },
+      data: {
+        saldoPendiente: nuevoSaldo,
+        estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial',
+      },
+    });
+  });
+}
+
+/** Historial de abonos de una compra especifica, con quien lo registro. */
+export async function pagosCompra(compraId: string) {
+  const pagos = await prisma.pagoCompra.findMany({
+    where: { compraId },
+    include: { registradoPor: true },
+    orderBy: { fecha: 'asc' },
+  });
+
+  return pagos.map((p) => ({
+    id: p.id,
+    monto: Number(p.monto),
+    metodoPago: p.metodoPago,
+    fecha: p.fecha,
+    registradoPor: { nombre: p.registradoPor?.nombre ?? 'Registro anterior' },
+  }));
+}
+
+/** Detalle completo de una compra especifica -- para cuando se hace click en una "entrada" del historial de un producto. */
+export async function obtenerDetalleCompra(compraId: string) {
+  const compra = await prisma.compra.findUniqueOrThrow({
+    where: { id: compraId },
+    include: {
+      proveedor: true,
+      pagos: true,
+      lotes: { include: { variante: { include: { producto: true } } } },
+    },
+  });
+
+  return {
+    id: compra.id,
+    numeroFactura: compra.numeroFactura,
+    fecha: compra.fecha,
+    fechaVencimiento: compra.fechaVencimiento,
+    total: Number(compra.total),
+    saldoPendiente: Number(compra.saldoPendiente),
+    estadoPago: compra.estadoPago,
+    proveedor: { id: compra.proveedor.id, nombre: compra.proveedor.nombre, telefono: compra.proveedor.telefono },
+    metodosPago: [...new Set(compra.pagos.map((p) => p.metodoPago))],
+    items: compra.lotes.map((l) => ({
+      producto: l.variante.producto.nombre,
+      marca: l.variante.marca,
+      cantidad: Number(l.cantidadInicial),
+      costoUnitario: Number(l.costoUnitario),
+      subtotal: Number(l.cantidadInicial) * Number(l.costoUnitario),
+    })),
+  };
+}
+
+/** Reporte de facturas pendientes de pago a proveedores */
+export async function facturasPendientes() {
+  const compras = await prisma.compra.findMany({
+    where: { estadoPago: { in: ['pendiente', 'parcial'] } },
+    include: { proveedor: true },
+    orderBy: { fechaVencimiento: 'asc' },
+  });
+
+  return compras.map((c) => ({
+    id: c.id,
+    numeroFactura: c.numeroFactura,
+    total: Number(c.total),
+    saldoPendiente: Number(c.saldoPendiente),
+    fechaVencimiento: c.fechaVencimiento,
+    fecha: c.fecha,
+    proveedor: {
+      id: c.proveedor.id,
+      nombre: c.proveedor.nombre,
+      telefono: c.proveedor.telefono,
+    },
+  }));
+}
+
+interface FiltrosHistorialCompras {
+  periodo?: string; // dia | semana | mes | anio | rango | todos
+  desde?: string;
+  hasta?: string;
+  proveedorId?: string;
+  estadoPago?: string; // pendiente | parcial | pagada
+}
+
+function obtenerRangoCompras(periodo: string, desde?: string, hasta?: string) {
+  const hoy = new Date();
+  const inicio = new Date(hoy);
+  const fin = new Date(hoy);
+
+  switch (periodo) {
+    case 'todos':
+      inicio.setFullYear(2000, 0, 1);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setFullYear(2100, 0, 1);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'dia':
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'semana':
+      inicio.setDate(hoy.getDate() - 6);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'anio':
+      inicio.setMonth(0, 1);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'rango': {
+      if (desde) {
+        const d = new Date(desde);
+        d.setHours(0, 0, 0, 0);
+        inicio.setTime(d.getTime());
+      } else {
+        inicio.setDate(1);
+        inicio.setHours(0, 0, 0, 0);
+      }
+      if (hasta) {
+        const h = new Date(hasta);
+        h.setHours(23, 59, 59, 999);
+        fin.setTime(h.getTime());
+      } else {
+        fin.setHours(23, 59, 59, 999);
+      }
+      break;
+    }
+    case 'mes':
+    default:
+      inicio.setDate(1);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+  }
+
+  return { inicio, fin };
+}
+
+/**
+ * Historial COMPLETO de compras (pagadas, parciales y pendientes -- a
+ * diferencia de facturasPendientes(), que solo muestra lo que aun se debe).
+ * Filtra por periodo, proveedor y estado de pago.
+ */
+export async function listarHistorialCompras(filtros: FiltrosHistorialCompras) {
+  const { inicio, fin } = obtenerRangoCompras(filtros.periodo || 'todos', filtros.desde, filtros.hasta);
+
+  const compras = await prisma.compra.findMany({
+    where: {
+      fecha: { gte: inicio, lte: fin },
+      ...(filtros.proveedorId ? { proveedorId: filtros.proveedorId } : {}),
+      ...(filtros.estadoPago ? { estadoPago: filtros.estadoPago } : {}),
+    },
+    include: {
+      proveedor: true,
+      pagos: true,
+      lotes: { include: { variante: { include: { producto: true } } } },
+    },
+    orderBy: { fecha: 'desc' },
+  });
+
+  return compras.map((c) => ({
+    id: c.id,
+    numeroFactura: c.numeroFactura,
+    fecha: c.fecha,
+    fechaVencimiento: c.fechaVencimiento,
+    total: Number(c.total),
+    saldoPendiente: Number(c.saldoPendiente),
+    estadoPago: c.estadoPago,
+    proveedor: { id: c.proveedor.id, nombre: c.proveedor.nombre, telefono: c.proveedor.telefono },
+    metodosPago: [...new Set(c.pagos.map((p) => p.metodoPago))],
+    items: c.lotes.map((l) => ({
+      producto: l.variante.producto.nombre,
+      marca: l.variante.marca,
+      cantidad: Number(l.cantidadInicial),
+      costoUnitario: Number(l.costoUnitario),
+    })),
+  }));
+}

@@ -1,0 +1,323 @@
+// Esquema del sistema de ventas/inventario/proveedores
+// Traduce el modelo de datos que diseñamos: variantes por marca, lotes FIFO,
+// compras con cuentas por pagar, ventas a credito con pagos parciales,
+// ajustes de inventario con autorizacion, gastos, permisos por usuario.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- USUARIOS Y PERMISOS ----------
+
+model Usuario {
+  id        String   @id @default(uuid())
+  nombre    String
+  telefono  String   @unique
+  pin       String   // hash del PIN de acceso
+  rolBase   String   @default("vendedor") // "vendedor" | "administrador", plantilla inicial
+  activo    Boolean  @default(true)
+  creadoEn  DateTime @default(now())
+
+  permisos           PermisosUsuario?
+  ventasRegistradas  Venta[]            @relation("VendedorVenta")
+  gastosRegistrados  Gasto[]
+  cortesRegistrados  CorteCaja[]
+  ajustesSolicitados AjusteInventario[] @relation("SolicitaAjuste")
+  ajustesAutorizados AjusteInventario[] @relation("AutorizaAjuste")
+  itemsAutorizados   VentaItem[]        @relation("AutorizaPrecio")
+  pagosVentaRegistrados PagoVenta[]
+  pagosCompraRegistrados PagoCompra[]
+  ventasCanceladas Venta[] @relation("CancelaVenta")
+  sesiones           Sesion[]
+}
+
+// Sesion de acceso: se crea una fila nueva en cada login exitoso.
+// El frontend guarda el token y lo manda en el header Authorization.
+// Reemplaza el esquema anterior donde no habia ninguna verificacion
+// de identidad en las llamadas posteriores al login.
+model Sesion {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
+  creadaEn  DateTime @default(now())
+  expiraEn  DateTime
+}
+
+model PermisosUsuario {
+  id                     String  @id @default(uuid())
+  usuarioId              String  @unique
+  usuario                Usuario @relation(fields: [usuarioId], references: [id])
+  puedeVerCostos         Boolean @default(false)
+  puedeRegistrarCompras  Boolean @default(false)
+  puedeVerUtilidad       Boolean @default(false)
+  puedeVerCarteraGeneral Boolean @default(false)
+  puedeVerGastosTodos    Boolean @default(false)
+  puedeAutorizar         Boolean @default(false)
+  puedeRegistrarPagos    Boolean @default(false)
+}
+
+// ---------- CATALOGO: PRODUCTOS (cortes) Y VARIANTES (marca) ----------
+
+model Producto {
+  id           String   @id @default(uuid())
+  nombre       String   // ej. "Pierna de cerdo"
+  categoriaId  String?
+  categoria    Categoria? @relation(fields: [categoriaId], references: [id])
+  creadoEn     DateTime @default(now())
+
+  variantes Variante[]
+}
+
+model Categoria {
+  id        String     @id @default(uuid())
+  nombre    String     // ej. "Cerdo", "Res", "Pollo"
+  productos Producto[]
+}
+
+model Variante {
+  id             String   @id @default(uuid())
+  productoId     String
+  producto       Producto @relation(fields: [productoId], references: [id])
+  marca          String   // ej. "Norson", "Kowi", "Soles", "Yoreme"
+  sku            String?  @unique
+  precioVenta    Decimal  @db.Decimal(10, 2)
+  stockMinimo    Decimal  @default(0) @db.Decimal(10, 3)
+  activo         Boolean  @default(true)
+  creadoEn       DateTime @default(now())
+
+  lotes      LoteInventario[]
+
+  @@unique([productoId, marca])
+}
+
+// ---------- PROVEEDORES Y COMPRAS ----------
+
+model Proveedor {
+  id        String   @id @default(uuid())
+  nombre    String
+  telefono  String?
+  contacto  String?
+  compras   Compra[]
+  gastos    Gasto[]
+}
+
+model Compra {
+  id                String   @id @default(uuid())
+  proveedorId       String
+  proveedor         Proveedor @relation(fields: [proveedorId], references: [id])
+  numeroFactura     String?
+  fecha             DateTime @default(now())
+  fechaVencimiento  DateTime?
+  total             Decimal  @db.Decimal(12, 2)
+  saldoPendiente    Decimal  @db.Decimal(12, 2)
+  estadoPago        String   @default("pendiente") // pendiente | parcial | pagada
+
+  lotes  LoteInventario[]
+  pagos  PagoCompra[]
+}
+
+model PagoCompra {
+  id              String   @id @default(uuid())
+  compraId        String
+  compra          Compra   @relation(fields: [compraId], references: [id])
+  fecha           DateTime @default(now())
+  monto           Decimal  @db.Decimal(12, 2)
+  metodoPago      String   // efectivo | transferencia
+  registradoPorId String?
+  registradoPor   Usuario? @relation(fields: [registradoPorId], references: [id])
+}
+
+// ---------- INVENTARIO POR LOTES (costeo FIFO) ----------
+
+model LoteInventario {
+  id                  String   @id @default(uuid())
+  varianteId          String
+  variante            Variante @relation(fields: [varianteId], references: [id])
+  compraId            String
+  compra              Compra   @relation(fields: [compraId], references: [id])
+  costoUnitario       Decimal  @db.Decimal(10, 2)
+  cantidadInicial     Decimal  @db.Decimal(10, 3)
+  cantidadDisponible  Decimal  @db.Decimal(10, 3)
+  fechaIngreso        DateTime @default(now())
+
+  ventaItems VentaItem[]
+  ajustes    AjusteInventario[]
+}
+
+// ---------- CLIENTES (CRM) ----------
+
+model Cliente {
+  id                  String   @id @default(uuid())
+  nombre              String
+  telefono            String
+  email               String?
+  direccion           String?
+  notas               String?
+  permiteVentaCredito Boolean  @default(true)
+  fechaAlta           DateTime @default(now())
+
+  ventas Venta[]
+}
+
+// ---------- VENTAS ----------
+
+model Venta {
+  id              String   @id @default(uuid())
+  folio           Int      @default(autoincrement())
+  vendedorId      String
+  vendedor        Usuario  @relation("VendedorVenta", fields: [vendedorId], references: [id])
+  clienteId       String
+  cliente         Cliente  @relation(fields: [clienteId], references: [id])
+  fecha           DateTime @default(now())
+  total           Decimal  @db.Decimal(12, 2)
+  saldoPendiente  Decimal  @db.Decimal(12, 2)
+  esCredito       Boolean  @default(false)
+  estadoPago      String   @default("pendiente") // pendiente | parcial | pagada
+  estadoSync      String   @default("sincronizada") // pendiente | sincronizada (para offline)
+  canalTicket     String?  // impreso | whatsapp | sms | impreso_whatsapp ...
+  cancelada       Boolean  @default(false)
+  canceladaEn     DateTime?
+  canceladaPorId  String?
+  canceladaPor    Usuario? @relation("CancelaVenta", fields: [canceladaPorId], references: [id])
+
+  items VentaItem[]
+  pagos PagoVenta[]
+}
+
+model VentaItem {
+  id                     String   @id @default(uuid())
+  ventaId                String
+  venta                  Venta    @relation(fields: [ventaId], references: [id])
+  loteId                 String
+  lote                   LoteInventario @relation(fields: [loteId], references: [id])
+  cantidad               Decimal  @db.Decimal(10, 3)
+  precioLista            Decimal  @db.Decimal(10, 2)
+  precioUnitario         Decimal  @db.Decimal(10, 2)
+  costoUnitarioSnapshot  Decimal  @db.Decimal(10, 2)
+  autorizadoPorId        String?
+  autorizadoPor          Usuario? @relation("AutorizaPrecio", fields: [autorizadoPorId], references: [id])
+  motivoAutorizacion     String?
+
+  pagoAsignaciones PagoAsignacion[]
+}
+
+model PagoVenta {
+  id             String   @id @default(uuid())
+  ventaId        String
+  venta          Venta    @relation(fields: [ventaId], references: [id])
+  fecha          DateTime @default(now())
+  monto          Decimal  @db.Decimal(12, 2)
+  metodoPago     String
+  registradoPorId String?
+  registradoPor  Usuario? @relation(fields: [registradoPorId], references: [id])
+
+  asignaciones PagoAsignacion[]
+}
+
+// Reparte cada pago parcial entre las lineas de la venta (automatico por default)
+model PagoAsignacion {
+  id            String    @id @default(uuid())
+  pagoId        String
+  pago          PagoVenta @relation(fields: [pagoId], references: [id])
+  ventaItemId   String
+  ventaItem     VentaItem @relation(fields: [ventaItemId], references: [id])
+  montoAsignado Decimal   @db.Decimal(12, 2)
+}
+
+// ---------- AJUSTES DE INVENTARIO (merma, requieren autorizacion) ----------
+
+model AjusteInventario {
+  id                String   @id @default(uuid())
+  loteId            String
+  lote              LoteInventario @relation(fields: [loteId], references: [id])
+  solicitadoPorId   String
+  solicitadoPor     Usuario  @relation("SolicitaAjuste", fields: [solicitadoPorId], references: [id])
+  autorizadoPorId   String?
+  autorizadoPor     Usuario? @relation("AutorizaAjuste", fields: [autorizadoPorId], references: [id])
+  tipo              String   // merma | correccion_positiva | correccion_negativa
+  cantidad          Decimal  @db.Decimal(10, 3)
+  motivo            String
+  impactoUtilidad   Decimal  @db.Decimal(12, 2)
+  fecha             DateTime @default(now())
+}
+
+// ---------- GASTOS ----------
+
+model CategoriaGasto {
+  id           String  @id @default(uuid())
+  nombre       String
+  departamento String
+  gastos       Gasto[]
+}
+
+model Gasto {
+  id             String         @id @default(uuid())
+  categoriaId    String
+  categoria      CategoriaGasto @relation(fields: [categoriaId], references: [id])
+  proveedorId    String?
+  proveedor      Proveedor?     @relation(fields: [proveedorId], references: [id])
+  registradoPorId String
+  registradoPor  Usuario        @relation(fields: [registradoPorId], references: [id])
+  concepto       String
+  monto          Decimal        @db.Decimal(12, 2)
+  metodoPago     String
+  fecha          DateTime       @default(now())
+}
+
+// ---------- CONFIGURACION DEL NEGOCIO, RECIBO E IMPRESORA ----------
+
+// Configuracion del negocio, del recibo y de la impresora. Es un
+// registro UNICO (siempre id = 'singleton') -- no hay varias
+// configuraciones, solo una para todo el negocio.
+model Configuracion {
+  id                String  @id @default("singleton")
+
+  // Datos del negocio (encabezado del recibo)
+  nombreNegocio     String  @default("")
+  logoBase64        String? // logo guardado como texto base64, se muestra tal cual en el recibo
+  telefono          String  @default("")
+  direccion         String  @default("")
+  notasNegocio      String  @default("")
+
+  // Configuracion del recibo
+  mostrarDatosCliente Boolean @default(true)
+  encabezadoRecibo   String  @default("")
+  piePaginaRecibo    String  @default("")
+
+  // Configuracion de la impresora
+  anchoPapelMm       Int     @default(58) // 58 o 80
+  imprimirDosVeces   Boolean @default(false)
+
+  actualizadoEn      DateTime @updatedAt
+}
+
+// ---------- CORTE DE CAJA DIARIO ----------
+
+// Solo se permite UN corte por dia -- "fecha" se normaliza a medianoche
+// del dia que representa, y tiene un unique constraint. utilidadDia,
+// gastosDia, balanzaAnterior y balanzaTotal son una FOTOGRAFIA de lo
+// calculado el dia que se cerro (no se recalculan despues); al editar
+// un corte desde el historico solo se pueden corregir los montos
+// contados a mano (efectivoContado, saldoBancoContado).
+model CorteCaja {
+  id                String   @id @default(uuid())
+  registradoPorId   String
+  registradoPor     Usuario  @relation(fields: [registradoPorId], references: [id])
+  fecha             DateTime // dia que representa este corte, normalizado a medianoche
+  creadoEn          DateTime @default(now())
+  actualizadoEn     DateTime @updatedAt
+  efectivoContado   Decimal  @db.Decimal(12, 2)
+  saldoBancoContado Decimal  @db.Decimal(12, 2)
+  utilidadDia       Decimal  @db.Decimal(12, 2) @default(0)
+  gastosDia         Decimal  @db.Decimal(12, 2) @default(0)
+  valorInventario   Decimal  @db.Decimal(12, 2) @default(0)
+  balanzaTotal      Decimal  @db.Decimal(12, 2) @default(0)
+
+  @@unique([fecha])
+}
