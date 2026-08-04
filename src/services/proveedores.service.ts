@@ -15,3 +15,14 @@ export async function crearProveedorRapido(nombre: string, telefono?: string) {
     data: { nombre, telefono },
   });
 }
+
+/** Alta masiva: crea un proveedor por cada nombre de la lista, sin telefono. */
+export async function importarProveedores(nombres: string[]) {
+  const nombresLimpios = nombres.map((n) => n.trim()).filter((n) => n.length > 0);
+
+  const creados = await prisma.$transaction(
+    nombresLimpios.map((nombre) => prisma.proveedor.create({ data: { nombre } }))
+  );
+
+  return { creados: creados.length };
+}

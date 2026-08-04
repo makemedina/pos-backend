@@ -1,5 +1,5 @@
 import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante } from '../services/catalogo.service';
-import { buscarProveedores, crearProveedorRapido } from '../services/proveedores.service';
+import { buscarProveedores, crearProveedorRapido, importarProveedores } from '../services/proveedores.service';
 import { Router } from 'express';
 import {
   crearVenta,
@@ -349,6 +349,20 @@ router.post('/proveedores', requierePermiso('puedeRegistrarCompras'), async (req
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al crear el proveedor' });
+  }
+});
+
+router.post('/proveedores/importar', async (req, res) => {
+  try {
+    const { nombres } = req.body;
+    if (!Array.isArray(nombres) || nombres.length === 0) {
+      return res.status(400).json({ error: 'Manda al menos un nombre para importar.' });
+    }
+    const resultado = await importarProveedores(nombres);
+    res.status(201).json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al importar los proveedores' });
   }
 });
 
