@@ -6,6 +6,7 @@ interface FiltrosHistorial {
   hasta?: string;
   clienteId?: string;
   metodoPago?: string; // efectivo | transferencia
+  incluirCanceladas?: boolean;
 }
 
 interface UsuarioContexto {
@@ -84,7 +85,7 @@ export async function listarHistorialVentas(filtros: FiltrosHistorial, usuario: 
   const ventas = await prisma.venta.findMany({
     where: {
       fecha: { gte: inicio, lte: fin },
-      cancelada: false,
+      ...(filtros.incluirCanceladas ? {} : { cancelada: false }),
       ...(puedeVerTodas ? {} : { vendedorId: usuario.id }),
       ...(filtros.clienteId ? { clienteId: filtros.clienteId } : {}),
       ...(filtros.metodoPago ? { pagos: { some: { metodoPago: filtros.metodoPago } } } : {}),
@@ -112,6 +113,8 @@ export async function listarHistorialVentas(filtros: FiltrosHistorial, usuario: 
     saldoPendiente: Number(v.saldoPendiente),
     esCredito: v.esCredito,
     estadoPago: v.estadoPago,
+    cancelada: v.cancelada,
+    canceladaEn: v.canceladaEn,
     cliente: { id: v.cliente.id, nombre: v.cliente.nombre, telefono: v.cliente.telefono },
     vendedor: { id: v.vendedor.id, nombre: v.vendedor.nombre },
     metodosPago: [...new Set(v.pagos.map((p) => p.metodoPago))],
