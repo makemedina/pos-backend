@@ -32,6 +32,25 @@ export async function crearCliente(datos: { nombre: string; telefono: string; di
   });
 }
 
+/**
+ * Alta masiva: crea un cliente por cada nombre de la lista, sin telefono
+ * (se puede agregar despues desde el detalle del cliente). No se hace
+ * ninguna deduplicacion automatica -- si dos nombres son parecidos pero
+ * no identicos, se crean ambos, para no arriesgar fusionar por error dos
+ * clientes distintos.
+ */
+export async function importarClientes(nombres: string[]) {
+  const nombresLimpios = nombres.map((n) => n.trim()).filter((n) => n.length > 0);
+
+  const creados = await prisma.$transaction(
+    nombresLimpios.map((nombre) =>
+      prisma.cliente.create({ data: { nombre, telefono: '' } })
+    )
+  );
+
+  return { creados: creados.length };
+}
+
 function calcularSaldoTotal(ventas: { esCredito: boolean; saldoPendiente: any }[]) {
   return ventas
     .filter((v) => v.esCredito)

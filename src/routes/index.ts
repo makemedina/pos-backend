@@ -18,6 +18,7 @@ import {
   buscarClientes,
   crearClienteRapido,
   crearCliente,
+  importarClientes,
   listarClientesConSaldo,
   obtenerClienteDetalle,
   actualizarCliente,
@@ -602,6 +603,20 @@ router.post('/clientes', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al crear el cliente' });
+  }
+});
+
+router.post('/clientes/importar', async (req, res) => {
+  try {
+    const { nombres } = req.body;
+    if (!Array.isArray(nombres) || nombres.length === 0) {
+      return res.status(400).json({ error: 'Manda al menos un nombre para importar.' });
+    }
+    const resultado = await importarClientes(nombres);
+    res.status(201).json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al importar los clientes' });
   }
 });
 
