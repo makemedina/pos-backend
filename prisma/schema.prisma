@@ -336,6 +336,11 @@ model Configuracion {
   // desde Configuracion cuando haga falta reconciliar.
   saldoBancoActual   Decimal  @db.Decimal(14, 2) @default(0)
 
+  // Lo mismo que saldoBancoActual, pero para efectivo: sube con ventas y
+  // abonos en efectivo, baja con gastos, compras y pagos a proveedor en
+  // efectivo. El default es el saldo inicial real del negocio.
+  saldoEfectivoActual Decimal @db.Decimal(14, 2) @default(52937)
+
   actualizadoEn      DateTime @updatedAt
 }
 

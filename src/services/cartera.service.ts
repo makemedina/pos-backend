@@ -152,6 +152,12 @@ export async function registrarPagoVenta(
         update: { saldoBancoActual: { increment: monto } },
         create: { id: 'singleton', saldoBancoActual: monto },
       });
+    } else if (metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { increment: monto } },
+        create: { id: 'singleton', saldoEfectivoActual: monto },
+      });
     }
 
     return pago;

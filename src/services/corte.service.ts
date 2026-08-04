@@ -246,6 +246,7 @@ export async function corteDelDia(fecha: Date) {
     cartera: carteraPendiente,
     cuentasPorPagar,
     saldoBancoSistema: configuracion ? Number(configuracion.saldoBancoActual) : 0,
+    saldoEfectivoSistema: configuracion ? Number(configuracion.saldoEfectivoActual) : 0,
     canceladas: {
       ventas: ventasCanceladasHoy.map((v) => ({
         id: v.id,

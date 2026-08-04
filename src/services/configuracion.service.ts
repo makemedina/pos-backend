@@ -26,6 +26,7 @@ interface ActualizarConfiguracionInput {
   anchoPapelMm?: number;
   imprimirDosVeces?: boolean;
   saldoBancoActual?: number;
+  saldoEfectivoActual?: number;
 }
 
 export async function actualizarConfiguracion(datos: ActualizarConfiguracionInput) {

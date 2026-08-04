@@ -76,6 +76,12 @@ export async function crearCompra(input: CrearCompraInput) {
           update: { saldoBancoActual: { decrement: pagoInicial } },
           create: { id: 'singleton', saldoBancoActual: -pagoInicial },
         });
+      } else if ((input.metodoPagoInicial ?? 'efectivo') === 'efectivo') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoEfectivoActual: { decrement: pagoInicial } },
+          create: { id: 'singleton', saldoEfectivoActual: -pagoInicial },
+        });
       }
     }
 
@@ -117,6 +123,12 @@ export async function registrarPagoCompra(
         where: { id: 'singleton' },
         update: { saldoBancoActual: { decrement: monto } },
         create: { id: 'singleton', saldoBancoActual: -monto },
+      });
+    } else if (metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { decrement: monto } },
+        create: { id: 'singleton', saldoEfectivoActual: -monto },
       });
     }
 
@@ -397,11 +409,21 @@ export async function cancelarCompra(
     const pagadoPorTransferencia = compra.pagos
       .filter((p) => p.metodoPago === 'transferencia')
       .reduce((acc, p) => acc + Number(p.monto), 0);
+    const pagadoEnEfectivo = compra.pagos
+      .filter((p) => p.metodoPago === 'efectivo')
+      .reduce((acc, p) => acc + Number(p.monto), 0);
     if (pagadoPorTransferencia > 0) {
       await tx.configuracion.upsert({
         where: { id: 'singleton' },
         update: { saldoBancoActual: { increment: pagadoPorTransferencia } },
         create: { id: 'singleton', saldoBancoActual: pagadoPorTransferencia },
+      });
+    }
+    if (pagadoEnEfectivo > 0) {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { increment: pagadoEnEfectivo } },
+        create: { id: 'singleton', saldoEfectivoActual: pagadoEnEfectivo },
       });
     }
 

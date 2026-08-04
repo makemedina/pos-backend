@@ -79,6 +79,12 @@ export async function crearGasto(input: {
         update: { saldoBancoActual: { decrement: input.monto } },
         create: { id: 'singleton', saldoBancoActual: -input.monto },
       });
+    } else if (input.metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { decrement: input.monto } },
+        create: { id: 'singleton', saldoEfectivoActual: -input.monto },
+      });
     }
 
     return gasto;
@@ -137,6 +143,12 @@ export async function cancelarGasto(
         where: { id: 'singleton' },
         update: { saldoBancoActual: { increment: Number(gastoActual.monto) } },
         create: { id: 'singleton', saldoBancoActual: Number(gastoActual.monto) },
+      });
+    } else if (gastoActual.metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { increment: Number(gastoActual.monto) } },
+        create: { id: 'singleton', saldoEfectivoActual: Number(gastoActual.monto) },
       });
     }
 
