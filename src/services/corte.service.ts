@@ -30,7 +30,7 @@ async function utilidadYGastosDelDia(inicioDia: Date, finDia: Date) {
       where: { fecha: { gte: inicioDia, lte: finDia }, cancelada: false },
       include: { items: true },
     }),
-    prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: finDia } } }),
+    prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: finDia }, cancelado: false } }),
   ]);
 
   const utilidadDia = ventasHoy.reduce((acc, v) => {
@@ -83,6 +83,7 @@ export async function corteDelDia(fecha: Date) {
     corteAnterior,
     ventasCanceladasHoy,
     comprasCanceladasHoy,
+    gastosCanceladosHoy,
   ] = await Promise.all([
     movimientosInventario(inicioDia, fin),
     prisma.venta.findMany({
@@ -95,7 +96,7 @@ export async function corteDelDia(fecha: Date) {
       include: { proveedor: true },
       orderBy: { fecha: 'asc' },
     }),
-    prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: fin } } }),
+    prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false } }),
     prisma.pagoVenta.findMany({
       where: { fecha: { gte: inicioDia, lte: fin } },
       include: { venta: { include: { cliente: true } }, registradoPor: true },
@@ -127,6 +128,11 @@ export async function corteDelDia(fecha: Date) {
       where: { cancelada: true, canceladaEn: { gte: inicioDia, lte: fin } },
       include: { proveedor: true, canceladaPor: true },
       orderBy: { canceladaEn: 'asc' },
+    }),
+    prisma.gasto.findMany({
+      where: { cancelado: true, canceladoEn: { gte: inicioDia, lte: fin } },
+      include: { categoria: true, canceladoPor: true },
+      orderBy: { canceladoEn: 'asc' },
     }),
   ]);
 
@@ -255,6 +261,15 @@ export async function corteDelDia(fecha: Date) {
         fechaOriginal: c.fecha,
         canceladaEn: c.canceladaEn,
         canceladaPor: c.canceladaPor?.nombre ?? '—',
+      })),
+      gastos: gastosCanceladosHoy.map((g) => ({
+        id: g.id,
+        concepto: g.concepto,
+        categoria: g.categoria.nombre,
+        total: Number(g.monto),
+        fechaOriginal: g.fecha,
+        canceladoEn: g.canceladoEn,
+        canceladoPor: g.canceladoPor?.nombre ?? '—',
       })),
     },
     // Los siguientes campos revelan la utilidad y el balance del negocio;

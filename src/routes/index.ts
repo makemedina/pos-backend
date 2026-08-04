@@ -35,7 +35,7 @@ import {
   LoginBloqueadoError,
 } from '../services/auth.service';
 import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
-import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos } from '../services/gastos.service';
+import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, cancelarGasto, GastoYaCanceladoError, AutorizacionCancelacionGastoInvalidaError } from '../services/gastos.service';
 import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
@@ -182,6 +182,27 @@ router.post('/gastos', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el gasto' });
+  }
+});
+
+router.post('/gastos/:id/cancelar', async (req, res) => {
+  try {
+    const { telefono, pin } = req.body || {};
+    const gasto = await cancelarGasto(
+      req.params.id,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
+    res.json(gasto);
+  } catch (err) {
+    if (err instanceof GastoYaCanceladoError) {
+      return res.status(409).json({ error: err.message, code: 'GASTO_YA_CANCELADO' });
+    }
+    if (err instanceof AutorizacionCancelacionGastoInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar el gasto' });
   }
 });
 

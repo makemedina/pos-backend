@@ -107,6 +107,7 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
           gte: inicio,
           lte: fin,
         },
+        cancelado: false,
       },
     }),
   ]);

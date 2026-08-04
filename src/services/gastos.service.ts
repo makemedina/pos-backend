@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { verificarAutorizadorPorTelefono } from './auth.service';
 
 // Categorias tipicas de un ERP para gastos operativos de un negocio pequeno.
 // Se crean automaticamente la primera vez que se piden las categorias y
@@ -68,6 +69,64 @@ export async function crearGasto(input: {
 }) {
   return prisma.gasto.create({
     data: input,
+    include: { categoria: true, registradoPor: true, proveedor: true },
+  });
+}
+
+export class GastoYaCanceladoError extends Error {
+  constructor() {
+    super('Este gasto ya estaba cancelado.');
+  }
+}
+
+export class AutorizacionCancelacionGastoInvalidaError extends Error {
+  constructor() {
+    super('Cancelar un gasto de un dia anterior necesita autorizacion por telefono y PIN.');
+  }
+}
+
+function esMismoDia(fecha: Date, referencia: Date) {
+  return (
+    fecha.getFullYear() === referencia.getFullYear() &&
+    fecha.getMonth() === referencia.getMonth() &&
+    fecha.getDate() === referencia.getDate()
+  );
+}
+
+/**
+ * Cancela un gasto (por ejemplo, si se capturo mal). No se borra --
+ * queda marcado como cancelado, para poder auditar despues, y se excluye
+ * de los totales de corte de caja y dashboard.
+ *
+ * Si el gasto es de un dia distinto al de hoy, cancelarlo requiere
+ * autorizacion por telefono+PIN de un administrador, igual que con
+ * ventas y compras.
+ */
+export async function cancelarGasto(
+  gastoId: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const gastoActual = await prisma.gasto.findUniqueOrThrow({ where: { id: gastoId } });
+  if (gastoActual.cancelado) {
+    throw new GastoYaCanceladoError();
+  }
+
+  let autorizadoPorId: string | null = null;
+  if (!esMismoDia(gastoActual.fecha, new Date())) {
+    if (!autorizacion) throw new AutorizacionCancelacionGastoInvalidaError();
+    autorizadoPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadoPorId) throw new AutorizacionCancelacionGastoInvalidaError();
+  }
+
+  return prisma.gasto.update({
+    where: { id: gastoId },
+    data: {
+      cancelado: true,
+      canceladoEn: new Date(),
+      canceladoPorId: solicitadoPorId,
+      autorizadoPorId,
+    },
     include: { categoria: true, registradoPor: true, proveedor: true },
   });
 }
