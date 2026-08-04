@@ -39,6 +39,7 @@ import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, c
 import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
+import { resetearTransacciones, cargarInventarioInicial, ConfirmacionInvalidaError } from '../services/admin.service';
 import { obtenerConfiguracion, actualizarConfiguracion } from '../services/configuracion.service';
 
 export const router = Router();
@@ -84,6 +85,35 @@ router.put('/configuracion', requiereAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al guardar la configuracion' });
+  }
+});
+
+// ---------- HERRAMIENTAS DE ADMINISTRACION (uso puntual, no operacion diaria) ----------
+
+router.post('/admin/resetear-transacciones', requiereAdmin, async (req, res) => {
+  try {
+    await resetearTransacciones(req.body?.confirmacion || '');
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof ConfirmacionInvalidaError) {
+      return res.status(400).json({ error: err.message, code: 'CONFIRMACION_INVALIDA' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al resetear las transacciones' });
+  }
+});
+
+router.post('/admin/cargar-inventario-inicial', requiereAdmin, async (req, res) => {
+  try {
+    const { filas } = req.body;
+    if (!Array.isArray(filas) || filas.length === 0) {
+      return res.status(400).json({ error: 'Manda al menos una fila.' });
+    }
+    const resultado = await cargarInventarioInicial(filas);
+    res.status(201).json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al cargar el inventario inicial' });
   }
 });
 
