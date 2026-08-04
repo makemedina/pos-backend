@@ -13,7 +13,7 @@ import {
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
-import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, CorteYaExisteError } from '../services/corte.service';
+import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import {
   buscarClientes,
   crearClienteRapido,
@@ -657,6 +657,16 @@ router.put('/corte/caja/:id', requiereAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar el corte de caja' });
+  }
+});
+
+router.delete('/corte/caja/:id', requiereAdmin, async (req, res) => {
+  try {
+    await eliminarCorteCaja(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar el corte de caja' });
   }
 });
 

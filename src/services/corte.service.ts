@@ -407,3 +407,13 @@ export async function actualizarCorteCaja(
     data: { efectivoContado, saldoBancoContado },
   });
 }
+
+/**
+ * Elimina un corte de caja ya guardado. Solo administrador -- borrar un
+ * corte cambia contra que se compara el dia siguiente en el cuadre, asi
+ * que hay que usarlo con cuidado (por ejemplo, si se capturo con la
+ * fecha equivocada y se quiere volver a hacer bien).
+ */
+export async function eliminarCorteCaja(id: string) {
+  await prisma.corteCaja.delete({ where: { id } });
+}
