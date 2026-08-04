@@ -160,6 +160,18 @@ export async function registrarPagoVenta(
       });
     }
 
-    return pago;
+    // El comprobante del pago necesita mostrar el saldo total actualizado
+    // del cliente (sumando todas sus notas a credito, no solo esta).
+    const [ventasCliente, cliente] = await Promise.all([
+      tx.venta.aggregate({
+        where: { clienteId: venta.clienteId, esCredito: true, cancelada: false },
+        _sum: { saldoPendiente: true },
+      }),
+      tx.cliente.findUniqueOrThrow({ where: { id: venta.clienteId } }),
+    ]);
+    const saldoTotalCliente =
+      Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
+
+    return { pago, saldoTotalCliente, saldoNotaRestante: Math.max(nuevoSaldo, 0) };
   });
 }

@@ -232,7 +232,19 @@ export async function crearVenta(input: CrearVentaInput) {
       }
     }
 
-    return { venta, items };
+    // El recibo necesita mostrar el saldo total actualizado del cliente
+    // (sumando todas sus notas a credito, incluida esta si aplica).
+    const [ventasCliente, cliente] = await Promise.all([
+      tx.venta.aggregate({
+        where: { clienteId: input.clienteId, esCredito: true, cancelada: false },
+        _sum: { saldoPendiente: true },
+      }),
+      tx.cliente.findUniqueOrThrow({ where: { id: input.clienteId } }),
+    ]);
+    const saldoTotalCliente =
+      Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
+
+    return { venta, items, saldoTotalCliente };
   });
 }
 
