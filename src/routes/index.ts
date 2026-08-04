@@ -11,7 +11,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import {
@@ -115,6 +115,20 @@ router.post('/admin/cargar-inventario-inicial', requiereAdmin, async (req, res) 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al cargar el inventario inicial' });
+  }
+});
+
+router.post('/admin/cargar-facturas-iniciales', requiereAdmin, async (req, res) => {
+  try {
+    const { filas } = req.body;
+    if (!Array.isArray(filas) || filas.length === 0) {
+      return res.status(400).json({ error: 'Manda al menos una fila.' });
+    }
+    const resultado = await cargarFacturasIniciales(filas);
+    res.status(201).json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al cargar las facturas iniciales' });
   }
 });
 

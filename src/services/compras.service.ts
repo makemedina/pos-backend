@@ -439,3 +439,56 @@ export async function cancelarCompra(
     });
   });
 }
+
+interface FacturaInicial {
+  proveedor: string;
+  telefono?: string;
+  factura: string;
+  importe: number;
+}
+
+/**
+ * Carga facturas pendientes heredadas de antes de usar el sistema (deuda
+ * con proveedores). Cada fila crea una Compra real, SIN lotes de
+ * inventario (una compra puede existir sin ellos) -- asi la factura
+ * aparece tal cual en "Facturas pendientes" y "Registrar pago", con su
+ * numero real, y se puede abonar como cualquier otra. No toca el
+ * inventario para nada.
+ *
+ * Si el proveedor no existe, se crea (usando el telefono si vino). Si ya
+ * existe y no tenia telefono guardado, se le pone el de esta fila.
+ */
+export async function cargarFacturasIniciales(filas: FacturaInicial[]) {
+  const resultado: { proveedor: string; factura: string }[] = [];
+
+  for (const fila of filas) {
+    let proveedor = await prisma.proveedor.findFirst({
+      where: { nombre: { equals: fila.proveedor.trim(), mode: 'insensitive' } },
+    });
+
+    if (!proveedor) {
+      proveedor = await prisma.proveedor.create({
+        data: { nombre: fila.proveedor.trim(), telefono: fila.telefono || undefined },
+      });
+    } else if (!proveedor.telefono && fila.telefono) {
+      proveedor = await prisma.proveedor.update({
+        where: { id: proveedor.id },
+        data: { telefono: fila.telefono },
+      });
+    }
+
+    await prisma.compra.create({
+      data: {
+        proveedorId: proveedor.id,
+        numeroFactura: fila.factura,
+        total: fila.importe,
+        saldoPendiente: fila.importe,
+        estadoPago: 'pendiente',
+      },
+    });
+
+    resultado.push({ proveedor: proveedor.nombre, factura: fila.factura });
+  }
+
+  return { creadas: resultado.length };
+}
