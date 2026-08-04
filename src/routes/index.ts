@@ -31,6 +31,7 @@ import {
   listarUsuarios,
   loginUsuario,
   cerrarSesion,
+  LoginBloqueadoError,
 } from '../services/auth.service';
 import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
 import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos } from '../services/gastos.service';
@@ -49,6 +50,9 @@ router.post('/auth/login', async (req, res) => {
     const resultado = await loginUsuario(telefono, pin);
     res.json(resultado);
   } catch (err) {
+    if (err instanceof LoginBloqueadoError) {
+      return res.status(429).json({ error: err.message, code: 'LOGIN_BLOQUEADO' });
+    }
     console.error(err);
     res.status(401).json({ error: 'Credenciales invalidas' });
   }

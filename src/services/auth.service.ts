@@ -1,6 +1,7 @@
 import bcrypt from 'bcrypt';
 import { randomUUID } from 'crypto';
 import { prisma } from '../prisma';
+import { verificarBloqueo, registrarIntentoFallido, limpiarIntentos } from './loginLimiter';
 
 const RONDAS_BCRYPT = 10;
 const DURACION_SESION_HORAS = 1;
@@ -34,15 +35,33 @@ function mapPermisos(usuario: any): UsuarioSesion['permisos'] {
   };
 }
 
+export class LoginBloqueadoError extends Error {
+  minutosRestantes: number;
+  constructor(minutosRestantes: number) {
+    super(`Demasiados intentos fallidos. Espera ${minutosRestantes} minuto(s) antes de volver a intentar.`);
+    this.minutosRestantes = minutosRestantes;
+  }
+}
+
 /**
  * Verifica telefono+PIN y, si son correctos, crea una fila nueva en Sesion
  * con un token aleatorio. Ese token es lo unico que el frontend guarda y
  * manda en cada llamada posterior (header Authorization: Bearer <token>).
+ *
+ * Antes de intentar validar el PIN, se revisa si este identificador esta
+ * bloqueado por demasiados intentos fallidos recientes -- el PIN es de
+ * solo 4 digitos, asi que sin este limite alguien podria probar todas las
+ * combinaciones posibles en minutos.
  */
 export async function loginUsuario(
   identificador: string,
   pin: string
 ): Promise<{ token: string; usuario: UsuarioSesion }> {
+  const minutosBloqueado = verificarBloqueo(identificador);
+  if (minutosBloqueado !== null) {
+    throw new LoginBloqueadoError(minutosBloqueado);
+  }
+
   // Se puede iniciar sesion con el telefono o con el nombre, en el mismo campo.
   const usuario = await prisma.usuario.findFirst({
     where: {
@@ -55,13 +74,17 @@ export async function loginUsuario(
   });
 
   if (!usuario || !usuario.activo) {
+    registrarIntentoFallido(identificador);
     throw new Error('Credenciales invalidas');
   }
 
   const pinValido = await bcrypt.compare(pin, usuario.pin);
   if (!pinValido) {
+    registrarIntentoFallido(identificador);
     throw new Error('Credenciales invalidas');
   }
+
+  limpiarIntentos(identificador);
 
   const token = randomUUID();
   const expiraEn = new Date(Date.now() + DURACION_SESION_HORAS * 60 * 60 * 1000);

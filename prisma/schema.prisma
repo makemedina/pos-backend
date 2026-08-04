@@ -129,6 +129,10 @@ model Compra {
 
   lotes  LoteInventario[]
   pagos  PagoCompra[]
+
+  @@index([fecha])
+  @@index([proveedorId])
+  @@index([estadoPago])
 }
 
 model PagoCompra {
@@ -199,6 +203,11 @@ model Venta {
 
   items VentaItem[]
   pagos PagoVenta[]
+
+  @@index([fecha])
+  @@index([clienteId])
+  @@index([vendedorId])
+  @@index([estadoPago])
 }
 
 model VentaItem {
@@ -279,6 +288,10 @@ model Gasto {
   monto          Decimal        @db.Decimal(12, 2)
   metodoPago     String
   fecha          DateTime       @default(now())
+
+  @@index([fecha])
+  @@index([categoriaId])
+  @@index([registradoPorId])
 }
 
 // ---------- CONFIGURACION DEL NEGOCIO, RECIBO E IMPRESORA ----------
