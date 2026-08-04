@@ -58,7 +58,28 @@ export async function importarClientes(nombres: string[]) {
  * coincidencia se regresan en "noEncontrados" para que el usuario los
  * revise (puede ser un typo o que ese cliente no se haya importado).
  */
-export async function cargarSaldosIniciales(filas: { nombre: string; saldo: number }[]) {
+/**
+ * Carga la deuda heredada de antes de usar el sistema como una NOTA real
+ * (una Venta a credito, sin productos/items -- una venta puede existir
+ * sin ellos, igual que una compra puede existir sin lotes). Asi se le
+ * puede ir abonando desde Cartera como a cualquier otra nota, con su
+ * propio folio.
+ *
+ * Se le puede dar una fecha anterior a proposito (por default, ayer)
+ * para que no se cuente como "venta de hoy" en el primer corte de caja
+ * que se haga despues de cargar los saldos.
+ */
+export async function cargarSaldosIniciales(
+  filas: { nombre: string; saldo: number }[],
+  registradoPorId: string,
+  fecha?: Date
+) {
+  const fechaCarga = fecha ?? (() => {
+    const ayer = new Date();
+    ayer.setDate(ayer.getDate() - 1);
+    return ayer;
+  })();
+
   const actualizados: string[] = [];
   const noEncontrados: string[] = [];
 
@@ -72,14 +93,60 @@ export async function cargarSaldosIniciales(filas: { nombre: string; saldo: numb
       continue;
     }
 
-    await prisma.cliente.update({
-      where: { id: cliente.id },
-      data: { saldoInicial: fila.saldo },
+    await prisma.venta.create({
+      data: {
+        clienteId: cliente.id,
+        vendedorId: registradoPorId,
+        fecha: fechaCarga,
+        total: fila.saldo,
+        saldoPendiente: fila.saldo,
+        esCredito: true,
+        estadoPago: 'pendiente',
+      },
     });
     actualizados.push(cliente.nombre);
   }
 
   return { actualizados, noEncontrados };
+}
+
+/**
+ * Migracion de un solo uso: convierte el saldoInicial (el mecanismo
+ * viejo, un simple numero en el cliente) en una nota real -- para los
+ * clientes a los que ya se les habia cargado saldo con la version
+ * anterior de esta herramienta, antes de que se volviera una nota de
+ * verdad.
+ */
+export async function migrarSaldoInicialANotas(registradoPorId: string, fecha?: Date) {
+  const fechaCarga = fecha ?? (() => {
+    const ayer = new Date();
+    ayer.setDate(ayer.getDate() - 1);
+    return ayer;
+  })();
+
+  const clientes = await prisma.cliente.findMany({ where: { saldoInicial: { gt: 0 } } });
+  const migrados: string[] = [];
+
+  for (const cliente of clientes) {
+    const saldo = Number(cliente.saldoInicial);
+    await prisma.$transaction([
+      prisma.venta.create({
+        data: {
+          clienteId: cliente.id,
+          vendedorId: registradoPorId,
+          fecha: fechaCarga,
+          total: saldo,
+          saldoPendiente: saldo,
+          esCredito: true,
+          estadoPago: 'pendiente',
+        },
+      }),
+      prisma.cliente.update({ where: { id: cliente.id }, data: { saldoInicial: 0 } }),
+    ]);
+    migrados.push(cliente.nombre);
+  }
+
+  return { migrados };
 }
 
 function calcularSaldoTotal(ventas: { esCredito: boolean; saldoPendiente: any }[], saldoInicial: any = 0) {

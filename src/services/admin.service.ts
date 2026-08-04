@@ -53,7 +53,13 @@ interface FilaInventarioInicial {
  * "Inventario inicial", con estado ya pagado (no es una deuda real, solo
  * es el mecanismo que usa el sistema para poder tener lotes con costo).
  */
-export async function cargarInventarioInicial(filas: FilaInventarioInicial[]) {
+export async function cargarInventarioInicial(filas: FilaInventarioInicial[], fecha?: Date) {
+  const fechaCarga = fecha ?? (() => {
+    const ayer = new Date();
+    ayer.setDate(ayer.getDate() - 1);
+    return ayer;
+  })();
+
   return prisma.$transaction(async (tx) => {
     const proveedorInicial = await tx.proveedor.upsert({
       where: { id: 'inventario-inicial' },
@@ -67,6 +73,7 @@ export async function cargarInventarioInicial(filas: FilaInventarioInicial[]) {
       data: {
         proveedorId: proveedorInicial.id,
         numeroFactura: 'INVENTARIO-INICIAL',
+        fecha: fechaCarga,
         total: totalCompra,
         saldoPendiente: 0,
         estadoPago: 'pagada',
@@ -102,6 +109,7 @@ export async function cargarInventarioInicial(filas: FilaInventarioInicial[]) {
           costoUnitario: fila.costo,
           cantidadInicial: fila.stock,
           cantidadDisponible: fila.stock,
+          fechaIngreso: fechaCarga,
         },
       });
 

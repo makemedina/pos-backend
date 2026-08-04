@@ -458,7 +458,13 @@ interface FacturaInicial {
  * Si el proveedor no existe, se crea (usando el telefono si vino). Si ya
  * existe y no tenia telefono guardado, se le pone el de esta fila.
  */
-export async function cargarFacturasIniciales(filas: FacturaInicial[]) {
+export async function cargarFacturasIniciales(filas: FacturaInicial[], fecha?: Date) {
+  const fechaCarga = fecha ?? (() => {
+    const ayer = new Date();
+    ayer.setDate(ayer.getDate() - 1);
+    return ayer;
+  })();
+
   const resultado: { proveedor: string; factura: string }[] = [];
 
   for (const fila of filas) {
@@ -481,6 +487,7 @@ export async function cargarFacturasIniciales(filas: FacturaInicial[]) {
       data: {
         proveedorId: proveedor.id,
         numeroFactura: fila.factura,
+        fecha: fechaCarga,
         total: fila.importe,
         saldoPendiente: fila.importe,
         estadoPago: 'pendiente',

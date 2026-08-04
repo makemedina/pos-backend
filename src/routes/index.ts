@@ -20,6 +20,7 @@ import {
   crearCliente,
   importarClientes,
   cargarSaldosIniciales,
+  migrarSaldoInicialANotas,
   listarClientesConSaldo,
   obtenerClienteDetalle,
   actualizarCliente,
@@ -106,11 +107,11 @@ router.post('/admin/resetear-transacciones', requiereAdmin, async (req, res) => 
 
 router.post('/admin/cargar-inventario-inicial', requiereAdmin, async (req, res) => {
   try {
-    const { filas } = req.body;
+    const { filas, fecha } = req.body;
     if (!Array.isArray(filas) || filas.length === 0) {
       return res.status(400).json({ error: 'Manda al menos una fila.' });
     }
-    const resultado = await cargarInventarioInicial(filas);
+    const resultado = await cargarInventarioInicial(filas, fecha ? new Date(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);
@@ -120,11 +121,11 @@ router.post('/admin/cargar-inventario-inicial', requiereAdmin, async (req, res) 
 
 router.post('/admin/cargar-facturas-iniciales', requiereAdmin, async (req, res) => {
   try {
-    const { filas } = req.body;
+    const { filas, fecha } = req.body;
     if (!Array.isArray(filas) || filas.length === 0) {
       return res.status(400).json({ error: 'Manda al menos una fila.' });
     }
-    const resultado = await cargarFacturasIniciales(filas);
+    const resultado = await cargarFacturasIniciales(filas, fecha ? new Date(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);
@@ -725,15 +726,26 @@ router.post('/clientes/importar', async (req, res) => {
 
 router.post('/clientes/saldos-iniciales', requiereAdmin, async (req, res) => {
   try {
-    const { filas } = req.body;
+    const { filas, fecha } = req.body;
     if (!Array.isArray(filas) || filas.length === 0) {
       return res.status(400).json({ error: 'Manda al menos una fila.' });
     }
-    const resultado = await cargarSaldosIniciales(filas);
+    const resultado = await cargarSaldosIniciales(filas, req.usuario!.id, fecha ? new Date(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al cargar los saldos iniciales' });
+  }
+});
+
+router.post('/clientes/migrar-saldo-inicial', requiereAdmin, async (req, res) => {
+  try {
+    const { fecha } = req.body;
+    const resultado = await migrarSaldoInicialANotas(req.usuario!.id, fecha ? new Date(fecha) : undefined);
+    res.status(201).json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al migrar los saldos iniciales' });
   }
 });
 
