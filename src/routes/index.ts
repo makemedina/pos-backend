@@ -611,9 +611,22 @@ router.get('/corte', async (req, res) => {
 
 router.post('/corte/caja', async (req, res) => {
   try {
-    const { efectivoContado, saldoBancoContado } = req.body;
+    const { efectivoContado, saldoBancoContado, fecha } = req.body;
+
+    // Elegir una fecha distinta a "hoy" es para casos especiales (como
+    // capturar el punto de partida de ayer al arrancar el sistema) --
+    // solo el administrador puede hacerlo.
+    if (fecha && req.usuario!.rolBase !== 'administrador') {
+      return res.status(403).json({ error: 'Solo un administrador puede capturar un corte con otra fecha.' });
+    }
+
     // registradoPorId ya no viene del body: siempre es quien esta logueado.
-    const corte = await guardarCorteCaja(req.usuario!.id, Number(efectivoContado), Number(saldoBancoContado));
+    const corte = await guardarCorteCaja(
+      req.usuario!.id,
+      Number(efectivoContado),
+      Number(saldoBancoContado),
+      fecha ? new Date(fecha) : undefined
+    );
     res.status(201).json(corte);
   } catch (err) {
     if (err instanceof CorteYaExisteError) {

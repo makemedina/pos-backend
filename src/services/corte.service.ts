@@ -297,9 +297,10 @@ export async function corteDelDia(fecha: Date) {
 export async function guardarCorteCaja(
   registradoPorId: string,
   efectivoContado: number,
-  saldoBancoContado: number
+  saldoBancoContado: number,
+  fechaCorte?: Date
 ) {
-  const hoy = normalizarFecha(new Date());
+  const hoy = normalizarFecha(fechaCorte ?? new Date());
   const fin = finDelDia(hoy);
 
   const existente = await prisma.corteCaja.findUnique({ where: { fecha: hoy } });
