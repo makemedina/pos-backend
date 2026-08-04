@@ -77,6 +77,7 @@ export async function corteDelDia(fecha: Date) {
     pagosProveedoresHoy,
     cartera,
     porPagar,
+    saldosInicialesClientes,
     { utilidadDia, gastosDia },
     corteExistente,
     valorInventario,
@@ -116,6 +117,7 @@ export async function corteDelDia(fecha: Date) {
       where: { estadoPago: { in: ['pendiente', 'parcial'] } },
       _sum: { saldoPendiente: true },
     }),
+    prisma.cliente.aggregate({ _sum: { saldoInicial: true } }),
     utilidadYGastosDelDia(inicioDia, fin),
     prisma.corteCaja.findUnique({ where: { fecha: inicioDia } }),
     valorInventarioActual(),
@@ -162,7 +164,8 @@ export async function corteDelDia(fecha: Date) {
     .filter((p) => p.metodoPago === 'transferencia')
     .reduce((acc, p) => acc + Number(p.monto), 0);
 
-  const carteraPendiente = Number(cartera._sum.saldoPendiente ?? 0);
+  const carteraPendiente =
+    Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
   const cuentasPorPagar = Number(porPagar._sum.saldoPendiente ?? 0);
 
   // OJO: aqui todavia no se puede calcular la balanza completa de hoy --
@@ -308,7 +311,7 @@ export async function guardarCorteCaja(
     throw new CorteYaExisteError();
   }
 
-  const [{ utilidadDia, gastosDia }, valorInventario, cartera, porPagar] = await Promise.all([
+  const [{ utilidadDia, gastosDia }, valorInventario, cartera, porPagar, saldosInicialesClientes] = await Promise.all([
     utilidadYGastosDelDia(hoy, fin),
     valorInventarioActual(),
     prisma.venta.aggregate({
@@ -319,9 +322,11 @@ export async function guardarCorteCaja(
       where: { estadoPago: { in: ['pendiente', 'parcial'] } },
       _sum: { saldoPendiente: true },
     }),
+    prisma.cliente.aggregate({ _sum: { saldoInicial: true } }),
   ]);
 
-  const carteraPendiente = Number(cartera._sum.saldoPendiente ?? 0);
+  const carteraPendiente =
+    Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
   const cuentasPorPagar = Number(porPagar._sum.saldoPendiente ?? 0);
   // La balanza es TODOS los activos menos TODOS los pasivos: lo que hay
   // en efectivo y en el banco (lo que se acaba de contar), mas lo que
