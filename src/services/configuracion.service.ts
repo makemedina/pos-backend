@@ -25,6 +25,7 @@ interface ActualizarConfiguracionInput {
   piePaginaRecibo?: string;
   anchoPapelMm?: number;
   imprimirDosVeces?: boolean;
+  saldoBancoActual?: number;
 }
 
 export async function actualizarConfiguracion(datos: ActualizarConfiguracionInput) {

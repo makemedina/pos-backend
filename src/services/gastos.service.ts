@@ -67,9 +67,21 @@ export async function crearGasto(input: {
   monto: number;
   metodoPago: string;
 }) {
-  return prisma.gasto.create({
-    data: input,
-    include: { categoria: true, registradoPor: true, proveedor: true },
+  return prisma.$transaction(async (tx) => {
+    const gasto = await tx.gasto.create({
+      data: input,
+      include: { categoria: true, registradoPor: true, proveedor: true },
+    });
+
+    if (input.metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { decrement: input.monto } },
+        create: { id: 'singleton', saldoBancoActual: -input.monto },
+      });
+    }
+
+    return gasto;
   });
 }
 
@@ -119,14 +131,24 @@ export async function cancelarGasto(
     if (!autorizadoPorId) throw new AutorizacionCancelacionGastoInvalidaError();
   }
 
-  return prisma.gasto.update({
-    where: { id: gastoId },
-    data: {
-      cancelado: true,
-      canceladoEn: new Date(),
-      canceladoPorId: solicitadoPorId,
-      autorizadoPorId,
-    },
-    include: { categoria: true, registradoPor: true, proveedor: true },
+  return prisma.$transaction(async (tx) => {
+    if (gastoActual.metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { increment: Number(gastoActual.monto) } },
+        create: { id: 'singleton', saldoBancoActual: Number(gastoActual.monto) },
+      });
+    }
+
+    return tx.gasto.update({
+      where: { id: gastoId },
+      data: {
+        cancelado: true,
+        canceladoEn: new Date(),
+        canceladoPorId: solicitadoPorId,
+        autorizadoPorId,
+      },
+      include: { categoria: true, registradoPor: true, proveedor: true },
+    });
   });
 }

@@ -143,6 +143,14 @@ export async function registrarPagoVenta(
       },
     });
 
+    if (metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { increment: monto } },
+        create: { id: 'singleton', saldoBancoActual: monto },
+      });
+    }
+
     return pago;
   });
 }

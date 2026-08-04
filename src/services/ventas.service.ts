@@ -214,6 +214,15 @@ export async function crearVenta(input: CrearVentaInput) {
           },
         });
       }
+
+      // Si el pago fue por transferencia, el saldo bancario sube solo.
+      if ((input.metodoPago ?? 'efectivo') === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { increment: input.montoPagadoAhora } },
+          create: { id: 'singleton', saldoBancoActual: input.montoPagadoAhora },
+        });
+      }
     }
 
     return { venta, items };
@@ -308,7 +317,7 @@ export async function cancelarVenta(
   return prisma.$transaction(async (tx) => {
     const venta = await tx.venta.findUniqueOrThrow({
       where: { id: ventaId },
-      include: { items: true },
+      include: { items: true, pagos: true },
     });
 
     if (venta.cancelada) {
@@ -319,6 +328,20 @@ export async function cancelarVenta(
       await tx.loteInventario.update({
         where: { id: item.loteId },
         data: { cantidadDisponible: { increment: item.cantidad } },
+      });
+    }
+
+    // Si algo de lo pagado fue por transferencia, se le regresa al saldo
+    // bancario -- esa venta ya no existe, ese dinero no se debe seguir
+    // contando como ingresado por ella.
+    const pagadoPorTransferencia = venta.pagos
+      .filter((p) => p.metodoPago === 'transferencia')
+      .reduce((acc, p) => acc + Number(p.monto), 0);
+    if (pagadoPorTransferencia > 0) {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { decrement: pagadoPorTransferencia } },
+        create: { id: 'singleton', saldoBancoActual: -pagadoPorTransferencia },
       });
     }
 

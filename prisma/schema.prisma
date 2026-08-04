@@ -326,6 +326,12 @@ model Configuracion {
   anchoPapelMm       Int     @default(58) // 58 o 80
   imprimirDosVeces   Boolean @default(false)
 
+  // Saldo bancario que el sistema lleva solo: aumenta con cada venta,
+  // abono o pago en transferencia; disminuye con cada gasto, compra o
+  // pago a proveedor en transferencia. Se puede corregir manualmente
+  // desde Configuracion cuando haga falta reconciliar.
+  saldoBancoActual   Decimal  @db.Decimal(14, 2) @default(0)
+
   actualizadoEn      DateTime @updatedAt
 }
 

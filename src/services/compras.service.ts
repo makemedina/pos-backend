@@ -69,6 +69,14 @@ export async function crearCompra(input: CrearCompraInput) {
           registradoPorId: input.registradoPorId,
         },
       });
+
+      if ((input.metodoPagoInicial ?? 'efectivo') === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { decrement: pagoInicial } },
+          create: { id: 'singleton', saldoBancoActual: -pagoInicial },
+        });
+      }
     }
 
     return compra;
@@ -103,6 +111,14 @@ export async function registrarPagoCompra(
     await tx.pagoCompra.create({
       data: { compraId, monto, metodoPago, registradoPorId },
     });
+
+    if (metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { decrement: monto } },
+        create: { id: 'singleton', saldoBancoActual: -monto },
+      });
+    }
 
     const nuevoSaldo = saldoActual - monto;
 
@@ -355,7 +371,7 @@ export async function cancelarCompra(
   return prisma.$transaction(async (tx) => {
     const compra = await tx.compra.findUniqueOrThrow({
       where: { id: compraId },
-      include: { lotes: true },
+      include: { lotes: true, pagos: true },
     });
 
     if (compra.cancelada) {
@@ -372,6 +388,20 @@ export async function cancelarCompra(
       await tx.loteInventario.update({
         where: { id: lote.id },
         data: { cantidadDisponible: 0 },
+      });
+    }
+
+    // Si algo de lo pagado fue por transferencia, se le regresa al saldo
+    // bancario -- esa compra ya no existe, ese dinero no debe seguir
+    // contando como salido por ella.
+    const pagadoPorTransferencia = compra.pagos
+      .filter((p) => p.metodoPago === 'transferencia')
+      .reduce((acc, p) => acc + Number(p.monto), 0);
+    if (pagadoPorTransferencia > 0) {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { increment: pagadoPorTransferencia } },
+        create: { id: 'singleton', saldoBancoActual: pagadoPorTransferencia },
       });
     }
 

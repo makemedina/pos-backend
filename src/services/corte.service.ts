@@ -84,6 +84,7 @@ export async function corteDelDia(fecha: Date) {
     ventasCanceladasHoy,
     comprasCanceladasHoy,
     gastosCanceladosHoy,
+    configuracion,
   ] = await Promise.all([
     movimientosInventario(inicioDia, fin),
     prisma.venta.findMany({
@@ -134,6 +135,7 @@ export async function corteDelDia(fecha: Date) {
       include: { categoria: true, canceladoPor: true },
       orderBy: { canceladoEn: 'asc' },
     }),
+    prisma.configuracion.findUnique({ where: { id: 'singleton' } }),
   ]);
 
   const totalVendido = ventasHoy.reduce((acc, v) => acc + Number(v.total), 0);
@@ -243,6 +245,7 @@ export async function corteDelDia(fecha: Date) {
     },
     cartera: carteraPendiente,
     cuentasPorPagar,
+    saldoBancoSistema: configuracion ? Number(configuracion.saldoBancoActual) : 0,
     canceladas: {
       ventas: ventasCanceladasHoy.map((v) => ({
         id: v.id,
