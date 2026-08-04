@@ -31,7 +31,7 @@ export class AutorizacionInvalidaError extends Error {
  */
 export async function lotesDeVariante(varianteId: string) {
   const lotes = await prisma.loteInventario.findMany({
-    where: { varianteId },
+    where: { varianteId, compra: { cancelada: false } },
     orderBy: { fechaIngreso: 'desc' },
     take: 20,
   });
@@ -105,7 +105,7 @@ export async function crearAjusteInventario(input: CrearAjusteInput) {
 export async function movimientosInventario(desde: Date, hasta: Date) {
   const [compras, ventas, ajustes] = await Promise.all([
     prisma.loteInventario.findMany({
-      where: { fechaIngreso: { gte: desde, lte: hasta } },
+      where: { fechaIngreso: { gte: desde, lte: hasta }, compra: { cancelada: false } },
       include: { variante: { include: { producto: true } } },
     }),
     prisma.ventaItem.findMany({
@@ -229,6 +229,7 @@ export async function detalleMovimientosInventario(filtros: FiltrosMovimientosDe
     prisma.loteInventario.findMany({
       where: {
         fechaIngreso: { gte: desde, lte: hasta },
+        compra: { cancelada: false },
         ...(productoId ? { variante: { productoId } } : {}),
       },
       include: { variante: { include: { producto: true } }, compra: { include: { proveedor: true } } },

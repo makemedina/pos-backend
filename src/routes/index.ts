@@ -9,8 +9,9 @@ import {
   ClienteSinCreditoError,
   cancelarVenta,
   VentaYaCanceladaError,
+  AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, MontoPagoCompraInvalidoError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import {
@@ -338,13 +339,21 @@ router.get('/ventas/:id', async (req, res) => {
 
 // Cancelar una venta regresa el stock y anula el saldo -- es una accion
 // sensible (afecta inventario y cartera), solo el administrador puede hacerla.
-router.post('/ventas/:id/cancelar', requiereAdmin, async (req, res) => {
+router.post('/ventas/:id/cancelar', async (req, res) => {
   try {
-    const venta = await cancelarVenta(req.params.id, req.usuario!.id);
+    const { telefono, pin } = req.body || {};
+    const venta = await cancelarVenta(
+      req.params.id,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
     res.json(venta);
   } catch (err) {
     if (err instanceof VentaYaCanceladaError) {
       return res.status(409).json({ error: err.message, code: 'VENTA_YA_CANCELADA' });
+    }
+    if (err instanceof AutorizacionCancelacionInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
     }
     console.error(err);
     res.status(500).json({ error: 'Error al cancelar la venta' });
@@ -410,6 +419,30 @@ router.get('/compras/:id', requierePermiso('puedeVerCostos'), async (req, res) =
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al obtener el detalle de la compra' });
+  }
+});
+
+router.post('/compras/:id/cancelar', async (req, res) => {
+  try {
+    const { telefono, pin } = req.body || {};
+    const compra = await cancelarCompra(
+      req.params.id,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
+    res.json(compra);
+  } catch (err) {
+    if (err instanceof CompraYaCanceladaError) {
+      return res.status(409).json({ error: err.message, code: 'COMPRA_YA_CANCELADA' });
+    }
+    if (err instanceof CompraConMercanciaVendidaError) {
+      return res.status(409).json({ error: err.message, code: 'MERCANCIA_YA_VENDIDA' });
+    }
+    if (err instanceof AutorizacionCancelacionCompraInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar la compra' });
   }
 });
 

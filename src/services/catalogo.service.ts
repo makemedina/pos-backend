@@ -136,7 +136,7 @@ export async function listarProductosGestion() {
 export async function historialVariante(varianteId: string) {
   const [lotes, ventaItems, ajustes] = await Promise.all([
     prisma.loteInventario.findMany({
-      where: { varianteId },
+      where: { varianteId, compra: { cancelada: false } },
       include: { compra: { include: { proveedor: true } } },
     }),
     prisma.ventaItem.findMany({

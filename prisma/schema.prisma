@@ -33,6 +33,9 @@ model Usuario {
   pagosVentaRegistrados PagoVenta[]
   pagosCompraRegistrados PagoCompra[]
   ventasCanceladas Venta[] @relation("CancelaVenta")
+  ventasAutorizadasCancelacion Venta[] @relation("AutorizaCancelacionVenta")
+  comprasCanceladas Compra[] @relation("CancelaCompra")
+  comprasAutorizadasCancelacion Compra[] @relation("AutorizaCancelacionCompra")
   sesiones           Sesion[]
 }
 
@@ -117,6 +120,12 @@ model Compra {
   total             Decimal  @db.Decimal(12, 2)
   saldoPendiente    Decimal  @db.Decimal(12, 2)
   estadoPago        String   @default("pendiente") // pendiente | parcial | pagada
+  cancelada         Boolean  @default(false)
+  canceladaEn       DateTime?
+  canceladaPorId    String?
+  canceladaPor      Usuario? @relation("CancelaCompra", fields: [canceladaPorId], references: [id])
+  autorizadaPorId   String?
+  autorizadaPor     Usuario? @relation("AutorizaCancelacionCompra", fields: [autorizadaPorId], references: [id])
 
   lotes  LoteInventario[]
   pagos  PagoCompra[]
@@ -185,6 +194,8 @@ model Venta {
   canceladaEn     DateTime?
   canceladaPorId  String?
   canceladaPor    Usuario? @relation("CancelaVenta", fields: [canceladaPorId], references: [id])
+  autorizadaPorId String?
+  autorizadaPor   Usuario? @relation("AutorizaCancelacionVenta", fields: [autorizadaPorId], references: [id])
 
   items VentaItem[]
   pagos PagoVenta[]

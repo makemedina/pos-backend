@@ -261,6 +261,20 @@ export class VentaYaCanceladaError extends Error {
   }
 }
 
+export class AutorizacionCancelacionInvalidaError extends Error {
+  constructor() {
+    super('Cancelar una venta de un dia anterior necesita autorizacion por telefono y PIN.');
+  }
+}
+
+function esMismoDia(fecha: Date, referencia: Date) {
+  return (
+    fecha.getFullYear() === referencia.getFullYear() &&
+    fecha.getMonth() === referencia.getMonth() &&
+    fecha.getDate() === referencia.getDate()
+  );
+}
+
 /**
  * Cancela una venta: regresa la cantidad de cada linea al lote de donde
  * salio (FIFO inverso), pone el saldo pendiente en cero (ya no se debe
@@ -269,8 +283,28 @@ export class VentaYaCanceladaError extends Error {
  * de datos marcados como cancelados, para poder auditar despues.
  * Los reportes (historial, dashboard, corte, cartera, movimientos de
  * inventario) excluyen las ventas canceladas de sus totales.
+ *
+ * Si la venta es de un dia distinto al de hoy, cancelarla requiere
+ * autorizacion por telefono+PIN de un administrador (igual que un ajuste
+ * de inventario) -- no basta con que quien lo solicita este loggeado.
  */
-export async function cancelarVenta(ventaId: string, canceladoPorId: string) {
+export async function cancelarVenta(
+  ventaId: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const ventaActual = await prisma.venta.findUniqueOrThrow({ where: { id: ventaId } });
+  if (ventaActual.cancelada) {
+    throw new VentaYaCanceladaError();
+  }
+
+  let autorizadaPorId: string | null = null;
+  if (!esMismoDia(ventaActual.fecha, new Date())) {
+    if (!autorizacion) throw new AutorizacionCancelacionInvalidaError();
+    autorizadaPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadaPorId) throw new AutorizacionCancelacionInvalidaError();
+  }
+
   return prisma.$transaction(async (tx) => {
     const venta = await tx.venta.findUniqueOrThrow({
       where: { id: ventaId },
@@ -293,7 +327,8 @@ export async function cancelarVenta(ventaId: string, canceladoPorId: string) {
       data: {
         cancelada: true,
         canceladaEn: new Date(),
-        canceladaPorId: canceladoPorId,
+        canceladaPorId: solicitadoPorId,
+        autorizadaPorId,
         saldoPendiente: 0,
       },
     });

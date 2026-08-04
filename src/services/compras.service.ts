@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { verificarAutorizadorPorTelefono } from './auth.service';
 
 interface ItemCompraInput {
   varianteId: string;
@@ -151,6 +152,8 @@ export async function obtenerDetalleCompra(compraId: string) {
     total: Number(compra.total),
     saldoPendiente: Number(compra.saldoPendiente),
     estadoPago: compra.estadoPago,
+    cancelada: compra.cancelada,
+    canceladaEn: compra.canceladaEn,
     proveedor: { id: compra.proveedor.id, nombre: compra.proveedor.nombre, telefono: compra.proveedor.telefono },
     metodosPago: [...new Set(compra.pagos.map((p) => p.metodoPago))],
     items: compra.lotes.map((l) => ({
@@ -166,7 +169,7 @@ export async function obtenerDetalleCompra(compraId: string) {
 /** Reporte de facturas pendientes de pago a proveedores */
 export async function facturasPendientes() {
   const compras = await prisma.compra.findMany({
-    where: { estadoPago: { in: ['pendiente', 'parcial'] } },
+    where: { estadoPago: { in: ['pendiente', 'parcial'] }, cancelada: false },
     include: { proveedor: true },
     orderBy: { fechaVencimiento: 'asc' },
   });
@@ -279,6 +282,8 @@ export async function listarHistorialCompras(filtros: FiltrosHistorialCompras) {
     total: Number(c.total),
     saldoPendiente: Number(c.saldoPendiente),
     estadoPago: c.estadoPago,
+    cancelada: c.cancelada,
+    canceladaEn: c.canceladaEn,
     proveedor: { id: c.proveedor.id, nombre: c.proveedor.nombre, telefono: c.proveedor.telefono },
     metodosPago: [...new Set(c.pagos.map((p) => p.metodoPago))],
     items: c.lotes.map((l) => ({
@@ -288,4 +293,97 @@ export async function listarHistorialCompras(filtros: FiltrosHistorialCompras) {
       costoUnitario: Number(l.costoUnitario),
     })),
   }));
+}
+
+export class CompraYaCanceladaError extends Error {
+  constructor() {
+    super('Esta compra ya estaba cancelada.');
+  }
+}
+
+export class AutorizacionCancelacionInvalidaError extends Error {
+  constructor() {
+    super('Cancelar una compra de un dia anterior necesita autorizacion por telefono y PIN.');
+  }
+}
+
+export class CompraConMercanciaVendidaError extends Error {
+  constructor() {
+    super(
+      'No se puede cancelar: parte de la mercancia de esta compra ya se vendio. ' +
+        'Solo se puede cancelar una compra cuyo inventario siga completo, sin tocar.'
+    );
+  }
+}
+
+function esMismoDia(fecha: Date, referencia: Date) {
+  return (
+    fecha.getFullYear() === referencia.getFullYear() &&
+    fecha.getMonth() === referencia.getMonth() &&
+    fecha.getDate() === referencia.getDate()
+  );
+}
+
+/**
+ * Cancela una compra: quita del inventario exactamente lo que esa compra
+ * habia agregado, pone su saldo pendiente en cero, y deja registro de
+ * quien y cuando la cancelo. Solo se puede cancelar si NADA de esa
+ * mercancia se ha vendido todavia (si ya se vendio parte, no hay forma
+ * segura de "deshacerlo" sin afectar ventas ya hechas a un cliente).
+ *
+ * Si la compra es de un dia distinto al de hoy, cancelarla requiere
+ * autorizacion por telefono+PIN de un administrador, igual que con las
+ * ventas.
+ */
+export async function cancelarCompra(
+  compraId: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const compraActual = await prisma.compra.findUniqueOrThrow({ where: { id: compraId } });
+  if (compraActual.cancelada) {
+    throw new CompraYaCanceladaError();
+  }
+
+  let autorizadaPorId: string | null = null;
+  if (!esMismoDia(compraActual.fecha, new Date())) {
+    if (!autorizacion) throw new AutorizacionCancelacionInvalidaError();
+    autorizadaPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadaPorId) throw new AutorizacionCancelacionInvalidaError();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const compra = await tx.compra.findUniqueOrThrow({
+      where: { id: compraId },
+      include: { lotes: true },
+    });
+
+    if (compra.cancelada) {
+      throw new CompraYaCanceladaError();
+    }
+
+    for (const lote of compra.lotes) {
+      if (Number(lote.cantidadDisponible) < Number(lote.cantidadInicial)) {
+        throw new CompraConMercanciaVendidaError();
+      }
+    }
+
+    for (const lote of compra.lotes) {
+      await tx.loteInventario.update({
+        where: { id: lote.id },
+        data: { cantidadDisponible: 0 },
+      });
+    }
+
+    return tx.compra.update({
+      where: { id: compraId },
+      data: {
+        cancelada: true,
+        canceladaEn: new Date(),
+        canceladaPorId: solicitadoPorId,
+        autorizadaPorId,
+        saldoPendiente: 0,
+      },
+    });
+  });
 }

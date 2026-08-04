@@ -81,10 +81,20 @@ export async function corteDelDia(fecha: Date) {
     corteExistente,
     valorInventario,
     corteAnterior,
+    ventasCanceladasHoy,
+    comprasCanceladasHoy,
   ] = await Promise.all([
     movimientosInventario(inicioDia, fin),
-    prisma.venta.findMany({ where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false } }),
-    prisma.compra.findMany({ where: { fecha: { gte: inicioDia, lte: fin } } }),
+    prisma.venta.findMany({
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false },
+      include: { cliente: true, vendedor: true },
+      orderBy: { fecha: 'asc' },
+    }),
+    prisma.compra.findMany({
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false },
+      include: { proveedor: true },
+      orderBy: { fecha: 'asc' },
+    }),
     prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: fin } } }),
     prisma.pagoVenta.findMany({
       where: { fecha: { gte: inicioDia, lte: fin } },
@@ -108,6 +118,16 @@ export async function corteDelDia(fecha: Date) {
     prisma.corteCaja.findUnique({ where: { fecha: inicioDia } }),
     valorInventarioActual(),
     prisma.corteCaja.findFirst({ where: { fecha: { lt: inicioDia } }, orderBy: { fecha: 'desc' } }),
+    prisma.venta.findMany({
+      where: { cancelada: true, canceladaEn: { gte: inicioDia, lte: fin } },
+      include: { cliente: true, canceladaPor: true },
+      orderBy: { canceladaEn: 'asc' },
+    }),
+    prisma.compra.findMany({
+      where: { cancelada: true, canceladaEn: { gte: inicioDia, lte: fin } },
+      include: { proveedor: true, canceladaPor: true },
+      orderBy: { canceladaEn: 'asc' },
+    }),
   ]);
 
   const totalVendido = ventasHoy.reduce((acc, v) => acc + Number(v.total), 0);
@@ -156,8 +176,34 @@ export async function corteDelDia(fecha: Date) {
         }
       : null,
     inventario: inventarioMovs,
-    ventas: { total: totalVendido, cobrado: totalCobrado, cantidad: ventasHoy.length },
-    compras: { total: totalComprado, cantidad: comprasHoy.length },
+    ventas: {
+      total: totalVendido,
+      cobrado: totalCobrado,
+      cantidad: ventasHoy.length,
+      detalle: ventasHoy.map((v) => ({
+        id: v.id,
+        folio: v.folio,
+        cliente: v.cliente.nombre,
+        vendedor: v.vendedor.nombre,
+        total: Number(v.total),
+        saldoPendiente: Number(v.saldoPendiente),
+        estadoPago: v.estadoPago,
+        fecha: v.fecha,
+      })),
+    },
+    compras: {
+      total: totalComprado,
+      cantidad: comprasHoy.length,
+      detalle: comprasHoy.map((c) => ({
+        id: c.id,
+        numeroFactura: c.numeroFactura,
+        proveedor: c.proveedor.nombre,
+        total: Number(c.total),
+        saldoPendiente: Number(c.saldoPendiente),
+        estadoPago: c.estadoPago,
+        fecha: c.fecha,
+      })),
+    },
     gastos: { total: totalGastos, cantidad: gastosHoy.length },
     pagosClientes: {
       total: totalPagosClientes,
@@ -191,6 +237,26 @@ export async function corteDelDia(fecha: Date) {
     },
     cartera: carteraPendiente,
     cuentasPorPagar,
+    canceladas: {
+      ventas: ventasCanceladasHoy.map((v) => ({
+        id: v.id,
+        folio: v.folio,
+        cliente: v.cliente.nombre,
+        total: Number(v.total),
+        fechaOriginal: v.fecha,
+        canceladaEn: v.canceladaEn,
+        canceladaPor: v.canceladaPor?.nombre ?? '—',
+      })),
+      compras: comprasCanceladasHoy.map((c) => ({
+        id: c.id,
+        numeroFactura: c.numeroFactura,
+        proveedor: c.proveedor.nombre,
+        total: Number(c.total),
+        fechaOriginal: c.fecha,
+        canceladaEn: c.canceladaEn,
+        canceladaPor: c.canceladaPor?.nombre ?? '—',
+      })),
+    },
     // Los siguientes campos revelan la utilidad y el balance del negocio;
     // la ruta los quita de la respuesta si el usuario no tiene permiso.
     utilidadDia,
