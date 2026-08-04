@@ -70,6 +70,7 @@ export async function cargarInventarioInicial(filas: FilaInventarioInicial[]) {
         total: totalCompra,
         saldoPendiente: 0,
         estadoPago: 'pagada',
+        esCargaInicial: true,
       },
     });
 

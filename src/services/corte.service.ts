@@ -93,7 +93,7 @@ export async function corteDelDia(fecha: Date) {
       orderBy: { fecha: 'asc' },
     }),
     prisma.compra.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false },
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false, esCargaInicial: false },
       include: { proveedor: true },
       orderBy: { fecha: 'asc' },
     }),
@@ -164,15 +164,14 @@ export async function corteDelDia(fecha: Date) {
 
   const carteraPendiente = Number(cartera._sum.saldoPendiente ?? 0);
   const cuentasPorPagar = Number(porPagar._sum.saldoPendiente ?? 0);
-  const balanzaTotal = carteraPendiente + valorInventario - cuentasPorPagar;
 
-  // Cuadre: la balanza de hoy deberia ser igual a la balanza de ayer
-  // mas la utilidad del dia menos los gastos del dia. Si no cuadra,
-  // es señal de que algo no quedo bien reflejado (un ajuste manual,
-  // una compra o gasto capturado con la fecha equivocada, etc).
+  // OJO: aqui todavia no se puede calcular la balanza completa de hoy --
+  // le faltan el efectivo y el banco, que el usuario apenas va a contar.
+  // El frontend calcula esa balanza en vivo, mientras el usuario escribe,
+  // usando estos mismos numeros (cartera, valorInventario, cuentasPorPagar)
+  // mas lo que vaya tecleando.
   const balanzaAyer = corteAnterior ? Number(corteAnterior.balanzaTotal) : null;
   const balanzaEsperada = balanzaAyer !== null ? balanzaAyer + utilidadDia - gastosDia : null;
-  const diferenciaCuadre = balanzaEsperada !== null ? balanzaTotal - balanzaEsperada : null;
 
   return {
     yaExisteCorteHoy: !!corteExistente,
@@ -278,12 +277,14 @@ export async function corteDelDia(fecha: Date) {
     },
     // Los siguientes campos revelan la utilidad y el balance del negocio;
     // la ruta los quita de la respuesta si el usuario no tiene permiso.
+    // balanzaTotal y diferenciaCuadre NO van aqui -- todavia no se sabe
+    // cuanto hay en efectivo/banco (el usuario apenas los va a contar),
+    // asi que el frontend los calcula en vivo con lo que vaya escribiendo,
+    // usando estos mismos numeros (cartera, valorInventario, cuentasPorPagar).
     utilidadDia,
     valorInventario,
-    balanzaTotal,
     balanzaAyer,
     balanzaEsperada,
-    diferenciaCuadre,
   };
 }
 
@@ -321,7 +322,12 @@ export async function guardarCorteCaja(
 
   const carteraPendiente = Number(cartera._sum.saldoPendiente ?? 0);
   const cuentasPorPagar = Number(porPagar._sum.saldoPendiente ?? 0);
-  const balanzaTotal = carteraPendiente + valorInventario - cuentasPorPagar;
+  // La balanza es TODOS los activos menos TODOS los pasivos: lo que hay
+  // en efectivo y en el banco (lo que se acaba de contar), mas lo que
+  // deben los clientes, mas el valor del inventario a costo, menos lo
+  // que se le debe a los proveedores.
+  const balanzaTotal =
+    efectivoContado + saldoBancoContado + carteraPendiente + valorInventario - cuentasPorPagar;
 
   try {
     return await prisma.corteCaja.create({

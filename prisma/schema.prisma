@@ -128,6 +128,10 @@ model Compra {
   canceladaPor      Usuario? @relation("CancelaCompra", fields: [canceladaPorId], references: [id])
   autorizadaPorId   String?
   autorizadaPor     Usuario? @relation("AutorizaCancelacionCompra", fields: [autorizadaPorId], references: [id])
+  // Marca las compras/facturas que se cargaron como saldo heredado (con
+  // Herramientas), no compras reales del dia -- para que el Corte de
+  // Caja no las cuente como egreso de "hoy" cuando se cargan.
+  esCargaInicial    Boolean  @default(false)
 
   lotes  LoteInventario[]
   pagos  PagoCompra[]

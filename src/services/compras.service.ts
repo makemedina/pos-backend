@@ -484,6 +484,7 @@ export async function cargarFacturasIniciales(filas: FacturaInicial[]) {
         total: fila.importe,
         saldoPendiente: fila.importe,
         estadoPago: 'pendiente',
+        esCargaInicial: true,
       },
     });
 
