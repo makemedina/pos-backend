@@ -19,6 +19,7 @@ import {
   crearClienteRapido,
   crearCliente,
   importarClientes,
+  cargarSaldosIniciales,
   listarClientesConSaldo,
   obtenerClienteDetalle,
   actualizarCliente,
@@ -668,6 +669,20 @@ router.post('/clientes/importar', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al importar los clientes' });
+  }
+});
+
+router.post('/clientes/saldos-iniciales', requiereAdmin, async (req, res) => {
+  try {
+    const { filas } = req.body;
+    if (!Array.isArray(filas) || filas.length === 0) {
+      return res.status(400).json({ error: 'Manda al menos una fila.' });
+    }
+    const resultado = await cargarSaldosIniciales(filas);
+    res.status(201).json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al cargar los saldos iniciales' });
   }
 });
 

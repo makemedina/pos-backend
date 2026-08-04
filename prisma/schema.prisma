@@ -175,6 +175,10 @@ model Cliente {
   direccion           String?
   notas               String?
   permiteVentaCredito Boolean  @default(true)
+  // Saldo que el cliente ya debia ANTES de usar el sistema (cartera
+  // heredada). Se suma al saldo calculado de sus ventas a credito, pero
+  // no es una venta real -- no afecta inventario ni reportes de ventas.
+  saldoInicial        Decimal  @db.Decimal(12, 2) @default(0)
   fechaAlta           DateTime @default(now())
 
   ventas Venta[]

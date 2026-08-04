@@ -51,10 +51,42 @@ export async function importarClientes(nombres: string[]) {
   return { creados: creados.length };
 }
 
-function calcularSaldoTotal(ventas: { esCredito: boolean; saldoPendiente: any }[]) {
-  return ventas
+/**
+ * Pone el saldo inicial (deuda heredada de antes de usar el sistema) a
+ * un grupo de clientes existentes, buscandolos por nombre exacto
+ * (sin distinguir mayusculas/minusculas). Los nombres que no encuentren
+ * coincidencia se regresan en "noEncontrados" para que el usuario los
+ * revise (puede ser un typo o que ese cliente no se haya importado).
+ */
+export async function cargarSaldosIniciales(filas: { nombre: string; saldo: number }[]) {
+  const actualizados: string[] = [];
+  const noEncontrados: string[] = [];
+
+  for (const fila of filas) {
+    const cliente = await prisma.cliente.findFirst({
+      where: { nombre: { equals: fila.nombre.trim(), mode: 'insensitive' } },
+    });
+
+    if (!cliente) {
+      noEncontrados.push(fila.nombre);
+      continue;
+    }
+
+    await prisma.cliente.update({
+      where: { id: cliente.id },
+      data: { saldoInicial: fila.saldo },
+    });
+    actualizados.push(cliente.nombre);
+  }
+
+  return { actualizados, noEncontrados };
+}
+
+function calcularSaldoTotal(ventas: { esCredito: boolean; saldoPendiente: any }[], saldoInicial: any = 0) {
+  const deVentas = ventas
     .filter((v) => v.esCredito)
     .reduce((acc, v) => acc + Number(v.saldoPendiente), 0);
+  return deVentas + Number(saldoInicial);
 }
 
 /**
@@ -74,7 +106,8 @@ export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sin
     telefono: c.telefono,
     direccion: c.direccion,
     permiteVentaCredito: c.permiteVentaCredito,
-    saldoTotal: calcularSaldoTotal(c.ventas),
+    saldoInicial: Number(c.saldoInicial),
+    saldoTotal: calcularSaldoTotal(c.ventas, c.saldoInicial),
   }));
 
   if (filtro === 'conDeuda') return mapeados.filter((c) => c.saldoTotal > 0);
@@ -94,7 +127,8 @@ export async function obtenerClienteDetalle(clienteId: string) {
     telefono: cliente.telefono,
     direccion: cliente.direccion,
     permiteVentaCredito: cliente.permiteVentaCredito,
-    saldoTotal: calcularSaldoTotal(cliente.ventas),
+    saldoInicial: Number(cliente.saldoInicial),
+    saldoTotal: calcularSaldoTotal(cliente.ventas, cliente.saldoInicial),
   };
 }
 

@@ -10,7 +10,9 @@ export class MontoPagoInvalidoError extends Error {}
  */
 export async function resumenCarteraClientes() {
   const clientes = await prisma.cliente.findMany({
-    where: { ventas: { some: { esCredito: true } } },
+    where: {
+      OR: [{ ventas: { some: { esCredito: true } } }, { saldoInicial: { gt: 0 } }],
+    },
     include: {
       ventas: { where: { esCredito: true }, select: { saldoPendiente: true } },
     },
@@ -22,7 +24,8 @@ export async function resumenCarteraClientes() {
       id: c.id,
       nombre: c.nombre,
       telefono: c.telefono,
-      saldoTotal: c.ventas.reduce((acc, v) => acc + Number(v.saldoPendiente), 0),
+      saldoInicial: Number(c.saldoInicial),
+      saldoTotal: c.ventas.reduce((acc, v) => acc + Number(v.saldoPendiente), 0) + Number(c.saldoInicial),
       notasConSaldo: c.ventas.filter((v) => Number(v.saldoPendiente) > 0).length,
     }))
     .sort((a, b) => b.saldoTotal - a.saldoTotal);
