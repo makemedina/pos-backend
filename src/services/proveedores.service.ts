@@ -26,3 +26,15 @@ export async function importarProveedores(nombres: string[]) {
 
   return { creados: creados.length };
 }
+
+/** Lista TODOS los proveedores, para la pantalla de gestion (alta/edicion). */
+export async function listarProveedores() {
+  return prisma.proveedor.findMany({ orderBy: { nombre: 'asc' } });
+}
+
+export async function actualizarProveedor(
+  id: string,
+  datos: { nombre?: string; telefono?: string | null }
+) {
+  return prisma.proveedor.update({ where: { id }, data: datos });
+}

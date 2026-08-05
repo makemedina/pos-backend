@@ -1,5 +1,5 @@
 import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante } from '../services/catalogo.service';
-import { buscarProveedores, crearProveedorRapido, importarProveedores } from '../services/proveedores.service';
+import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor } from '../services/proveedores.service';
 import { Router } from 'express';
 import {
   crearVenta,
@@ -356,6 +356,16 @@ router.get('/proveedores', async (req, res) => {
   }
 });
 
+router.get('/proveedores/todos', async (req, res) => {
+  try {
+    const proveedores = await listarProveedores();
+    res.json(proveedores);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar los proveedores' });
+  }
+});
+
 router.post('/proveedores', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
   try {
     const { nombre, telefono } = req.body;
@@ -364,6 +374,17 @@ router.post('/proveedores', requierePermiso('puedeRegistrarCompras'), async (req
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al crear el proveedor' });
+  }
+});
+
+router.put('/proveedores/:id', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+  try {
+    const { nombre, telefono } = req.body;
+    const proveedor = await actualizarProveedor(req.params.id, { nombre, telefono });
+    res.json(proveedor);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar el proveedor' });
   }
 });
 
