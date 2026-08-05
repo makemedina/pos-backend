@@ -30,6 +30,7 @@ import {
 import {
   actualizarPermisosUsuario,
   cambiarPinUsuario,
+  actualizarUsuario,
   crearUsuario,
   listarUsuarios,
   loginUsuario,
@@ -175,6 +176,21 @@ router.put('/usuarios/:id/pin', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al cambiar el PIN' });
+  }
+});
+
+router.put('/usuarios/:id', async (req, res) => {
+  try {
+    const esUnoMismo = req.usuario!.id === req.params.id;
+    if (!esUnoMismo && req.usuario!.rolBase !== 'administrador') {
+      return res.status(403).json({ error: 'Solo puedes editar tus propios datos' });
+    }
+    const { nombre, telefono } = req.body;
+    const usuario = await actualizarUsuario(req.params.id, { nombre, telefono });
+    res.json(usuario);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar el usuario' });
   }
 });
 

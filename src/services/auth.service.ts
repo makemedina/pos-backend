@@ -235,6 +235,18 @@ export async function cambiarPinUsuario(usuarioId: string, nuevoPin: string) {
   return sinPin;
 }
 
+export async function actualizarUsuario(
+  usuarioId: string,
+  datos: { nombre?: string; telefono?: string }
+) {
+  const usuario = await prisma.usuario.update({
+    where: { id: usuarioId },
+    data: datos,
+  });
+  const { pin: _pin, ...sinPin } = usuario;
+  return sinPin;
+}
+
 export async function actualizarPermisosUsuario(
   usuarioId: string,
   permisos: {
