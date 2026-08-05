@@ -11,6 +11,8 @@ app.use(
   cors({
     origin: [
       'https://pos-frontend-258.pages.dev',
+      'https://mrcarnes.com',
+      'https://www.mrcarnes.com',
       'http://localhost:5173',
     ],
   })
