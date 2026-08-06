@@ -165,11 +165,20 @@ function obtenerRangoFechas(periodo: string, desde?: string, hasta?: string) {
       inicio.setHours(0, 0, 0, 0);
       fin.setHours(23, 59, 59, 999);
       break;
-    case 'semana':
-      inicio.setDate(hoy.getDate() - 6);
-      inicio.setHours(0, 0, 0, 0);
-      fin.setHours(23, 59, 59, 999);
+    case 'semana': {
+      // Semana calendario de lunes a domingo (no los ultimos 7 dias).
+      const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado
+      const diffLunes = diaSemana === 0 ? 6 : diaSemana - 1;
+      const lunes = new Date(hoy);
+      lunes.setDate(hoy.getDate() - diffLunes);
+      lunes.setHours(0, 0, 0, 0);
+      const domingo = new Date(lunes);
+      domingo.setDate(lunes.getDate() + 6);
+      domingo.setHours(23, 59, 59, 999);
+      inicio.setTime(lunes.getTime());
+      fin.setTime(domingo.getTime());
       break;
+    }
     case 'anio':
       inicio.setMonth(0, 1);
       inicio.setHours(0, 0, 0, 0);
