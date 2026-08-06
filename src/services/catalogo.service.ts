@@ -112,6 +112,25 @@ export async function listarProductosGestion() {
   return variantes
     .map((v) => {
       const stockDisponible = v.lotes.reduce((acc, l) => acc + Number(l.cantidadDisponible), 0);
+
+      // Costo (precio de compra): promedio ponderado de los lotes que
+      // todavia tienen stock -- si se mezclaron compras a distinto costo,
+      // esto refleja lo que realmente cuesta reponer lo que queda. Si ya
+      // no queda stock, se usa el costo de la ultima compra como
+      // referencia (no hay lotes disponibles para promediar).
+      const lotesConStock = v.lotes.filter((l) => Number(l.cantidadDisponible) > 0);
+      let costoPromedio: number | null = null;
+      if (lotesConStock.length > 0) {
+        const valorTotal = lotesConStock.reduce(
+          (acc, l) => acc + Number(l.cantidadDisponible) * Number(l.costoUnitario),
+          0
+        );
+        costoPromedio = valorTotal / stockDisponible;
+      } else if (v.lotes.length > 0) {
+        const ultimoLote = [...v.lotes].sort((a, b) => b.fechaIngreso.getTime() - a.fechaIngreso.getTime())[0];
+        costoPromedio = Number(ultimoLote.costoUnitario);
+      }
+
       return {
         id: v.id,
         producto: v.producto.nombre,
@@ -119,6 +138,7 @@ export async function listarProductosGestion() {
         marca: v.marca,
         categoria: v.producto.categoria?.nombre ?? null,
         precioVenta: Number(v.precioVenta),
+        costoPromedio,
         stockMinimo: Number(v.stockMinimo),
         stockDisponible,
         pocoStock: stockDisponible <= Number(v.stockMinimo),
