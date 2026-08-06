@@ -19,6 +19,40 @@ function finDelDia(inicioDia: Date) {
   return f;
 }
 
+// Orden fijo para agrupar el reporte del corte: primero efectivo, luego
+// transferencia, y al final lo que todavia no tiene metodo de pago (a
+// credito, sin abono el dia de hoy). Dentro de cada metodo, alfabetico
+// por cliente/proveedor.
+const ORDEN_METODO_PAGO: Record<string, number> = { efectivo: 0, transferencia: 1 };
+
+function ordenarPorMetodoYNombre<T>(
+  items: T[],
+  getMetodo: (item: T) => string | null,
+  getNombre: (item: T) => string
+): T[] {
+  return [...items].sort((a, b) => {
+    const metodoA = getMetodo(a);
+    const metodoB = getMetodo(b);
+    const ordenA = metodoA ? ORDEN_METODO_PAGO[metodoA] ?? 2 : 3;
+    const ordenB = metodoB ? ORDEN_METODO_PAGO[metodoB] ?? 2 : 3;
+    if (ordenA !== ordenB) return ordenA - ordenB;
+    return getNombre(a).localeCompare(getNombre(b));
+  });
+}
+
+function subtotalesPorMetodo<T>(items: T[], getMetodo: (item: T) => string | null, getMonto: (item: T) => number) {
+  return items.reduce(
+    (acc, item) => {
+      const metodo = getMetodo(item);
+      if (metodo === 'transferencia') acc.transferencia += getMonto(item);
+      else if (metodo === 'efectivo') acc.efectivo += getMonto(item);
+      else acc.credito += getMonto(item);
+      return acc;
+    },
+    { efectivo: 0, transferencia: 0, credito: 0 }
+  );
+}
+
 /**
  * Utilidad bruta (margen de venta menos costo, por producto) y gastos
  * operativos de un dia especifico. Se usa tanto para la vista previa
@@ -90,12 +124,12 @@ export async function corteDelDia(fecha: Date) {
     movimientosInventario(inicioDia, fin),
     prisma.venta.findMany({
       where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false },
-      include: { cliente: true, vendedor: true },
+      include: { cliente: true, vendedor: true, pagos: { orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
     prisma.compra.findMany({
       where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false, esCargaInicial: false },
-      include: { proveedor: true },
+      include: { proveedor: true, pagos: { orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
     prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false } }),
@@ -148,6 +182,45 @@ export async function corteDelDia(fecha: Date) {
   const totalComprado = comprasHoy.reduce((acc, c) => acc + Number(c.total), 0);
   const totalGastos = gastosHoy.reduce((acc, g) => acc + Number(g.monto), 0);
 
+  // El "metodo de pago" de una venta/compra es el de su pago inicial (el
+  // primero registrado); si todavia no tiene ningun pago (venta/compra a
+  // credito sin abono hoy) se deja en null y se agrupa como "credito".
+  const ventasConMetodo = ventasHoy.map((v) => ({
+    venta: v,
+    metodoPago: v.pagos[0]?.metodoPago ?? null,
+  }));
+  const comprasConMetodo = comprasHoy.map((c) => ({
+    compra: c,
+    metodoPago: c.pagos[0]?.metodoPago ?? null,
+  }));
+
+  const ventasOrdenadas = ordenarPorMetodoYNombre(
+    ventasConMetodo,
+    (x) => x.metodoPago,
+    (x) => x.venta.cliente.nombre
+  );
+  const comprasOrdenadas = ordenarPorMetodoYNombre(
+    comprasConMetodo,
+    (x) => x.metodoPago,
+    (x) => x.compra.proveedor.nombre
+  );
+  const pagosClientesOrdenados = ordenarPorMetodoYNombre(
+    pagosClientesHoy,
+    (p) => p.metodoPago,
+    (p) => p.venta.cliente.nombre
+  );
+
+  const ventasSubtotalesPorMetodo = subtotalesPorMetodo(
+    ventasConMetodo,
+    (x) => x.metodoPago,
+    (x) => Number(x.venta.total)
+  );
+  const comprasSubtotalesPorMetodo = subtotalesPorMetodo(
+    comprasConMetodo,
+    (x) => x.metodoPago,
+    (x) => Number(x.compra.total)
+  );
+
   const totalPagosClientes = pagosClientesHoy.reduce((acc, p) => acc + Number(p.monto), 0);
   const pagosClientesEfectivo = pagosClientesHoy
     .filter((p) => p.metodoPago === 'efectivo')
@@ -190,7 +263,8 @@ export async function corteDelDia(fecha: Date) {
       total: totalVendido,
       cobrado: totalCobrado,
       cantidad: ventasHoy.length,
-      detalle: ventasHoy.map((v) => ({
+      subtotalesPorMetodo: ventasSubtotalesPorMetodo,
+      detalle: ventasOrdenadas.map(({ venta: v, metodoPago }) => ({
         id: v.id,
         folio: v.folio,
         cliente: v.cliente.nombre,
@@ -198,19 +272,22 @@ export async function corteDelDia(fecha: Date) {
         total: Number(v.total),
         saldoPendiente: Number(v.saldoPendiente),
         estadoPago: v.estadoPago,
+        metodoPago,
         fecha: v.fecha,
       })),
     },
     compras: {
       total: totalComprado,
       cantidad: comprasHoy.length,
-      detalle: comprasHoy.map((c) => ({
+      subtotalesPorMetodo: comprasSubtotalesPorMetodo,
+      detalle: comprasOrdenadas.map(({ compra: c, metodoPago }) => ({
         id: c.id,
         numeroFactura: c.numeroFactura,
         proveedor: c.proveedor.nombre,
         total: Number(c.total),
         saldoPendiente: Number(c.saldoPendiente),
         estadoPago: c.estadoPago,
+        metodoPago,
         fecha: c.fecha,
       })),
     },
@@ -220,7 +297,7 @@ export async function corteDelDia(fecha: Date) {
       efectivo: pagosClientesEfectivo,
       transferencia: pagosClientesTransferencia,
       cantidad: pagosClientesHoy.length,
-      detalle: pagosClientesHoy.map((p) => ({
+      detalle: pagosClientesOrdenados.map((p) => ({
         id: p.id,
         folio: p.venta.folio,
         cliente: p.venta.cliente.nombre,
