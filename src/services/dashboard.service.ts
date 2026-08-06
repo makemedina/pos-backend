@@ -6,6 +6,14 @@ interface DashboardFilters {
   hasta?: string;
 }
 
+function fechaKey(fecha: Date) {
+  const d = new Date(fecha);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function parseDate(value: string, endOfDay = false) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
@@ -185,6 +193,69 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     return acc;
   }, {});
 
+  // Desglose dia por dia de cada metrica principal, para que el
+  // frontend pueda mostrar el detalle al hacer click en una tarjeta.
+  interface AcumuladoDia {
+    facturacion: number;
+    ventasCantidad: number;
+    ganancia: number;
+    totalCobrado: number;
+    gastos: number;
+    ventasEfectivo: number;
+    ventasTransferencia: number;
+  }
+  const porDiaMap = new Map<string, AcumuladoDia>();
+  function obtenerDia(key: string): AcumuladoDia {
+    let dia = porDiaMap.get(key);
+    if (!dia) {
+      dia = {
+        facturacion: 0,
+        ventasCantidad: 0,
+        ganancia: 0,
+        totalCobrado: 0,
+        gastos: 0,
+        ventasEfectivo: 0,
+        ventasTransferencia: 0,
+      };
+      porDiaMap.set(key, dia);
+    }
+    return dia;
+  }
+
+  for (const venta of ventas) {
+    const dia = obtenerDia(fechaKey(venta.fecha));
+    dia.facturacion += Number(venta.total);
+    dia.ventasCantidad += 1;
+    dia.totalCobrado += Number(venta.total) - Number(venta.saldoPendiente);
+    dia.ganancia += venta.items.reduce((acc, item) => {
+      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
+      const costo = Number(item.cantidad) * Number(item.costoUnitarioSnapshot);
+      return acc + (subtotal - costo);
+    }, 0);
+    const metodo = venta.pagos[0]?.metodoPago;
+    if (metodo === 'efectivo') dia.ventasEfectivo += Number(venta.total);
+    else if (metodo === 'transferencia') dia.ventasTransferencia += Number(venta.total);
+  }
+  for (const gasto of gastos) {
+    obtenerDia(fechaKey(gasto.fecha)).gastos += Number(gasto.monto);
+  }
+
+  const detallePorDia = Array.from(porDiaMap.entries())
+    .map(([fecha, d]) => {
+      const baseMetodoDia = d.ventasEfectivo + d.ventasTransferencia;
+      return {
+        fecha,
+        facturacion: d.facturacion,
+        ventasCantidad: d.ventasCantidad,
+        ticketMedio: d.ventasCantidad > 0 ? d.facturacion / d.ventasCantidad : 0,
+        ganancia: d.ganancia,
+        totalCobrado: d.totalCobrado,
+        utilidadNeta: d.ganancia - d.gastos,
+        porcentajeEfectivo: baseMetodoDia > 0 ? (d.ventasEfectivo / baseMetodoDia) * 100 : 0,
+      };
+    })
+    .sort((a, b) => b.fecha.localeCompare(a.fecha)); // mas reciente primero
+
   return {
     totalVentas,
     totalCobrado,
@@ -206,5 +277,6 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     ventasPorVendedor: Object.entries(ventasPorVendedor)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5),
+    detallePorDia,
   };
 }
