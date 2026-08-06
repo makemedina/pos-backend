@@ -37,7 +37,7 @@ import {
   cerrarSesion,
   LoginBloqueadoError,
 } from '../services/auth.service';
-import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
+import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, registrarPagoMultiNota, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
 import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, cancelarGasto, GastoYaCanceladoError, AutorizacionCancelacionGastoInvalidaError } from '../services/gastos.service';
 import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
@@ -873,6 +873,32 @@ router.get('/cartera/clientes/:clienteId/notas', requierePermiso('puedeVerCarter
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al consultar las notas del cliente' });
+  }
+});
+
+router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
+  try {
+    const { asignaciones, metodoPago } = req.body;
+    if (!Array.isArray(asignaciones) || asignaciones.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar al menos una asignacion de pago', code: 'MONTO_INVALIDO' });
+    }
+    const asignacionesNormalizadas = asignaciones.map((a: any) => ({
+      ventaId: String(a.ventaId),
+      monto: Number(a.monto),
+    }));
+    const resultado = await registrarPagoMultiNota(
+      req.params.clienteId,
+      asignacionesNormalizadas,
+      metodoPago,
+      req.usuario!.id
+    );
+    res.status(201).json(resultado);
+  } catch (err) {
+    if (err instanceof MontoPagoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar el pago repartido entre notas' });
   }
 });
 

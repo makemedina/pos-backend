@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 
 export class MontoPagoInvalidoError extends Error {}
@@ -74,104 +75,168 @@ export async function pagosVenta(ventaId: string) {
 }
 
 /**
- * Registra un abono a una venta a credito. Reparte el monto entre las
- * lineas (VentaItem) que aun tengan saldo pendiente, proporcional a lo
- * que le falta a CADA una -- no al subtotal original de la linea, sino
- * a subtotal menos lo ya asignado en pagos anteriores. Esto es lo que
- * permite que calcularUtilidadVenta() siga siendo exacto por producto
- * incluso con varios abonos parciales en momentos distintos.
+ * Aplica un abono a una venta a credito DENTRO de una transaccion ya
+ * abierta por el llamador (para poder reutilizar esta logica tanto para
+ * un pago a una sola nota como para un pago repartido entre varias).
  *
- * Antes esta funcion solo bajaba el saldoPendiente global de la venta,
- * sin crear ningun PagoAsignacion -- por eso los abonos posteriores al
- * pago inicial no se reflejaban en la utilidad cobrada por producto.
+ * Reparte el monto entre las lineas (VentaItem) que aun tengan saldo
+ * pendiente, proporcional a lo que le falta a CADA una -- no al subtotal
+ * original de la linea, sino a subtotal menos lo ya asignado en pagos
+ * anteriores. Esto es lo que permite que calcularUtilidadVenta() siga
+ * siendo exacto por producto incluso con varios abonos parciales en
+ * momentos distintos.
  */
+async function aplicarPagoVenta(
+  tx: Prisma.TransactionClient,
+  ventaId: string,
+  monto: number,
+  metodoPago: string,
+  registradoPorId: string,
+  clienteIdEsperado?: string
+) {
+  if (!monto || monto <= 0) {
+    throw new MontoPagoInvalidoError('El monto del pago debe ser mayor a cero');
+  }
+
+  const venta = await tx.venta.findUniqueOrThrow({
+    where: { id: ventaId },
+    include: { items: { include: { pagoAsignaciones: true } } },
+  });
+
+  if (clienteIdEsperado && venta.clienteId !== clienteIdEsperado) {
+    throw new MontoPagoInvalidoError(`La venta #${venta.folio} no pertenece a este cliente`);
+  }
+
+  const saldoActual = Number(venta.saldoPendiente);
+  if (monto > saldoActual) {
+    throw new MontoPagoInvalidoError(
+      `El pago de $${monto.toFixed(2)} para la venta #${venta.folio} es mayor a su saldo pendiente de $${saldoActual.toFixed(2)}`
+    );
+  }
+
+  const restantePorItem = venta.items.map((item) => {
+    const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
+    const asignado = item.pagoAsignaciones.reduce((acc, a) => acc + Number(a.montoAsignado), 0);
+    return { itemId: item.id, restante: Math.max(subtotal - asignado, 0) };
+  });
+
+  const totalRestante = restantePorItem.reduce((acc, i) => acc + i.restante, 0);
+
+  const pago = await tx.pagoVenta.create({
+    data: { ventaId, monto, metodoPago, registradoPorId },
+  });
+
+  if (totalRestante > 0) {
+    for (const item of restantePorItem) {
+      if (item.restante <= 0) continue;
+      const proporcion = item.restante / totalRestante;
+      const montoAsignado = monto * proporcion;
+
+      await tx.pagoAsignacion.create({
+        data: {
+          pagoId: pago.id,
+          ventaItemId: item.itemId,
+          montoAsignado,
+        },
+      });
+    }
+  }
+
+  const nuevoSaldo = saldoActual - monto;
+
+  await tx.venta.update({
+    where: { id: ventaId },
+    data: {
+      saldoPendiente: Math.max(nuevoSaldo, 0),
+      estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial',
+    },
+  });
+
+  if (metodoPago === 'transferencia') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoBancoActual: { increment: monto } },
+      create: { id: 'singleton', saldoBancoActual: monto },
+    });
+  } else if (metodoPago === 'efectivo') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoEfectivoActual: { increment: monto } },
+      create: { id: 'singleton', saldoEfectivoActual: monto },
+    });
+  }
+
+  return { pago, venta, saldoNotaRestante: Math.max(nuevoSaldo, 0) };
+}
+
+async function calcularSaldoTotalCliente(tx: Prisma.TransactionClient, clienteId: string) {
+  const [ventasCliente, cliente] = await Promise.all([
+    tx.venta.aggregate({
+      where: { clienteId, esCredito: true, cancelada: false },
+      _sum: { saldoPendiente: true },
+    }),
+    tx.cliente.findUniqueOrThrow({ where: { id: clienteId } }),
+  ]);
+  return Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
+}
+
+/** Registra un abono a una sola venta a credito. */
 export async function registrarPagoVenta(
   ventaId: string,
   monto: number,
   metodoPago: string,
   registradoPorId: string
 ) {
-  if (!monto || monto <= 0) {
-    throw new MontoPagoInvalidoError('El monto del pago debe ser mayor a cero');
+  return prisma.$transaction(async (tx) => {
+    const { pago, venta, saldoNotaRestante } = await aplicarPagoVenta(tx, ventaId, monto, metodoPago, registradoPorId);
+    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, venta.clienteId);
+    return { pago, saldoTotalCliente, saldoNotaRestante };
+  });
+}
+
+export interface AsignacionPagoMultiple {
+  ventaId: string;
+  monto: number;
+}
+
+/**
+ * Registra UN pago que un cliente entrega y que se reparte entre varias
+ * de sus notas a credito, con el monto especifico que se le asigna a
+ * cada una (ej. el cliente da $10,000 y se asignan $3,000 a tres notas y
+ * $1,000 a otra). Cada asignacion se procesa con la misma logica de
+ * prorrateo por linea que un abono individual, todo en una sola
+ * transaccion para que quede todo o nada.
+ */
+export async function registrarPagoMultiNota(
+  clienteId: string,
+  asignaciones: AsignacionPagoMultiple[],
+  metodoPago: string,
+  registradoPorId: string
+) {
+  const asignacionesValidas = asignaciones.filter((a) => a.monto > 0);
+  if (asignacionesValidas.length === 0) {
+    throw new MontoPagoInvalidoError('Debes asignar un monto mayor a cero a al menos una nota');
   }
 
   return prisma.$transaction(async (tx) => {
-    const venta = await tx.venta.findUniqueOrThrow({
-      where: { id: ventaId },
-      include: { items: { include: { pagoAsignaciones: true } } },
-    });
+    const detalle: { ventaId: string; folio: number; monto: number; saldoNotaRestante: number }[] = [];
+    let totalPagado = 0;
 
-    const saldoActual = Number(venta.saldoPendiente);
-    if (monto > saldoActual) {
-      throw new MontoPagoInvalidoError(
-        `El pago de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
+    for (const asignacion of asignacionesValidas) {
+      const { venta, saldoNotaRestante } = await aplicarPagoVenta(
+        tx,
+        asignacion.ventaId,
+        asignacion.monto,
+        metodoPago,
+        registradoPorId,
+        clienteId
       );
+      totalPagado += asignacion.monto;
+      detalle.push({ ventaId: asignacion.ventaId, folio: venta.folio, monto: asignacion.monto, saldoNotaRestante });
     }
 
-    const restantePorItem = venta.items.map((item) => {
-      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
-      const asignado = item.pagoAsignaciones.reduce((acc, a) => acc + Number(a.montoAsignado), 0);
-      return { itemId: item.id, restante: Math.max(subtotal - asignado, 0) };
-    });
+    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
 
-    const totalRestante = restantePorItem.reduce((acc, i) => acc + i.restante, 0);
-
-    const pago = await tx.pagoVenta.create({
-      data: { ventaId, monto, metodoPago, registradoPorId },
-    });
-
-    if (totalRestante > 0) {
-      for (const item of restantePorItem) {
-        if (item.restante <= 0) continue;
-        const proporcion = item.restante / totalRestante;
-        const montoAsignado = monto * proporcion;
-
-        await tx.pagoAsignacion.create({
-          data: {
-            pagoId: pago.id,
-            ventaItemId: item.itemId,
-            montoAsignado,
-          },
-        });
-      }
-    }
-
-    const nuevoSaldo = saldoActual - monto;
-
-    await tx.venta.update({
-      where: { id: ventaId },
-      data: {
-        saldoPendiente: Math.max(nuevoSaldo, 0),
-        estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial',
-      },
-    });
-
-    if (metodoPago === 'transferencia') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoBancoActual: { increment: monto } },
-        create: { id: 'singleton', saldoBancoActual: monto },
-      });
-    } else if (metodoPago === 'efectivo') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoEfectivoActual: { increment: monto } },
-        create: { id: 'singleton', saldoEfectivoActual: monto },
-      });
-    }
-
-    // El comprobante del pago necesita mostrar el saldo total actualizado
-    // del cliente (sumando todas sus notas a credito, no solo esta).
-    const [ventasCliente, cliente] = await Promise.all([
-      tx.venta.aggregate({
-        where: { clienteId: venta.clienteId, esCredito: true, cancelada: false },
-        _sum: { saldoPendiente: true },
-      }),
-      tx.cliente.findUniqueOrThrow({ where: { id: venta.clienteId } }),
-    ]);
-    const saldoTotalCliente =
-      Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
-
-    return { pago, saldoTotalCliente, saldoNotaRestante: Math.max(nuevoSaldo, 0) };
+    return { detalle, totalPagado, saldoTotalCliente };
   });
 }
