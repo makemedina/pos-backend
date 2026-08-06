@@ -108,6 +108,9 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
             },
           },
         },
+        pagos: { orderBy: { fecha: 'asc' } },
+        cliente: true,
+        vendedor: true,
       },
     }),
     prisma.gasto.findMany({
@@ -138,11 +141,47 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
 
   const totalGastos = gastos.reduce((acc, gasto) => acc + Number(gasto.monto), 0);
 
+  const ventasCantidad = ventas.length;
+  const ticketMedio = ventasCantidad > 0 ? totalVentas / ventasCantidad : 0;
+
+  // El "metodo de pago" de una venta es el de su pago inicial (el primero
+  // registrado); las que todavia no tienen ningun pago (a credito, sin
+  // abono aun) no cuentan para el porcentaje de efectivo vs transferencia.
+  const ventasEfectivo = ventas
+    .filter((v) => v.pagos[0]?.metodoPago === 'efectivo')
+    .reduce((acc, v) => acc + Number(v.total), 0);
+  const ventasTransferencia = ventas
+    .filter((v) => v.pagos[0]?.metodoPago === 'transferencia')
+    .reduce((acc, v) => acc + Number(v.total), 0);
+  const baseConMetodoPago = ventasEfectivo + ventasTransferencia;
+  const porcentajeEfectivo = baseConMetodoPago > 0 ? (ventasEfectivo / baseConMetodoPago) * 100 : 0;
+
   const productosMasVendidos = ventas.reduce<Record<string, number>>((acc, venta) => {
     venta.items.forEach((item) => {
       const nombre = item.lote.variante.producto.nombre;
       acc[nombre] = (acc[nombre] || 0) + Number(item.cantidad);
     });
+    return acc;
+  }, {});
+
+  const productosMasVendidosPorValor = ventas.reduce<Record<string, number>>((acc, venta) => {
+    venta.items.forEach((item) => {
+      const nombre = item.lote.variante.producto.nombre;
+      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
+      acc[nombre] = (acc[nombre] || 0) + subtotal;
+    });
+    return acc;
+  }, {});
+
+  const mejoresClientesPorValor = ventas.reduce<Record<string, number>>((acc, venta) => {
+    const nombre = venta.cliente.nombre;
+    acc[nombre] = (acc[nombre] || 0) + Number(venta.total);
+    return acc;
+  }, {});
+
+  const ventasPorVendedor = ventas.reduce<Record<string, number>>((acc, venta) => {
+    const nombre = venta.vendedor.nombre;
+    acc[nombre] = (acc[nombre] || 0) + Number(venta.total);
     return acc;
   }, {});
 
@@ -152,7 +191,19 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     utilidadBruta,
     totalGastos,
     utilidadNeta: utilidadBruta - totalGastos,
+    ventasCantidad,
+    ticketMedio,
+    porcentajeEfectivo,
     productosMasVendidos: Object.entries(productosMasVendidos)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5),
+    productosMasVendidosPorValor: Object.entries(productosMasVendidosPorValor)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5),
+    mejoresClientesPorValor: Object.entries(mejoresClientesPorValor)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5),
+    ventasPorVendedor: Object.entries(ventasPorVendedor)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5),
   };
