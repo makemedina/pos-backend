@@ -38,6 +38,9 @@ model Usuario {
   comprasAutorizadasCancelacion Compra[] @relation("AutorizaCancelacionCompra")
   gastosCancelados Gasto[] @relation("CancelaGasto")
   gastosAutorizadosCancelacion Gasto[] @relation("AutorizaCancelacionGasto")
+  depositosRegistrados DepositoBanco[] @relation("RegistraDeposito")
+  depositosCancelados DepositoBanco[] @relation("CancelaDeposito")
+  depositosAutorizadosCancelacion DepositoBanco[] @relation("AutorizaCancelacionDeposito")
   sesiones           Sesion[]
 }
 
@@ -307,6 +310,28 @@ model Gasto {
 
   @@index([fecha])
   @@index([categoriaId])
+  @@index([registradoPorId])
+}
+
+// Traspaso interno de efectivo a banco (ej. cuando se deposita lo
+// vendido en efectivo para poder pagarle a un proveedor por
+// transferencia). No es venta ni gasto -- no afecta utilidad, solo
+// mueve saldoEfectivoActual a saldoBancoActual en Configuracion.
+model DepositoBanco {
+  id              String    @id @default(uuid())
+  monto           Decimal   @db.Decimal(12, 2)
+  notas           String?
+  fecha           DateTime  @default(now())
+  registradoPorId String
+  registradoPor   Usuario   @relation("RegistraDeposito", fields: [registradoPorId], references: [id])
+  cancelado       Boolean   @default(false)
+  canceladoEn     DateTime?
+  canceladoPorId  String?
+  canceladoPor    Usuario?  @relation("CancelaDeposito", fields: [canceladoPorId], references: [id])
+  autorizadoPorId String?
+  autorizadoPor   Usuario?  @relation("AutorizaCancelacionDeposito", fields: [autorizadoPorId], references: [id])
+
+  @@index([fecha])
   @@index([registradoPorId])
 }
 

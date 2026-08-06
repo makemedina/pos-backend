@@ -39,6 +39,7 @@ import {
 } from '../services/auth.service';
 import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, registrarPagoMultiNota, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
 import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, cancelarGasto, GastoYaCanceladoError, AutorizacionCancelacionGastoInvalidaError } from '../services/gastos.service';
+import { registrarDeposito, listarDepositos, cancelarDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
 import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
@@ -265,6 +266,52 @@ router.post('/gastos/:id/cancelar', async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: 'Error al cancelar el gasto' });
+  }
+});
+
+// ---------- DEPOSITOS A BANCO (traspaso interno de efectivo a banco) ----------
+
+router.get('/depositos', async (req, res) => {
+  try {
+    const depositos = await listarDepositos(req.usuario!);
+    res.json(depositos);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar depositos' });
+  }
+});
+
+router.post('/depositos', async (req, res) => {
+  try {
+    const deposito = await registrarDeposito(Number(req.body.monto), req.body.notas, req.usuario!.id);
+    res.status(201).json(deposito);
+  } catch (err) {
+    if (err instanceof MontoDepositoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar el deposito' });
+  }
+});
+
+router.post('/depositos/:id/cancelar', async (req, res) => {
+  try {
+    const { telefono, pin } = req.body || {};
+    const deposito = await cancelarDeposito(
+      req.params.id,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
+    res.json(deposito);
+  } catch (err) {
+    if (err instanceof DepositoYaCanceladoError) {
+      return res.status(409).json({ error: err.message, code: 'DEPOSITO_YA_CANCELADO' });
+    }
+    if (err instanceof AutorizacionCancelacionDepositoInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar el deposito' });
   }
 });
 

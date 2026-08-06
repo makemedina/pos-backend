@@ -109,6 +109,7 @@ export async function corteDelDia(fecha: Date) {
     gastosHoy,
     pagosClientesHoy,
     pagosProveedoresHoy,
+    depositosBancoHoy,
     cartera,
     porPagar,
     saldosInicialesClientes,
@@ -141,6 +142,11 @@ export async function corteDelDia(fecha: Date) {
     prisma.pagoCompra.findMany({
       where: { fecha: { gte: inicioDia, lte: fin } },
       include: { compra: { include: { proveedor: true } }, registradoPor: true },
+      orderBy: { fecha: 'asc' },
+    }),
+    prisma.depositoBanco.findMany({
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false },
+      include: { registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
     prisma.venta.aggregate({
@@ -181,6 +187,7 @@ export async function corteDelDia(fecha: Date) {
   );
   const totalComprado = comprasHoy.reduce((acc, c) => acc + Number(c.total), 0);
   const totalGastos = gastosHoy.reduce((acc, g) => acc + Number(g.monto), 0);
+  const totalDepositosBanco = depositosBancoHoy.reduce((acc, d) => acc + Number(d.monto), 0);
 
   // El "metodo de pago" de una venta/compra es el de su pago inicial (el
   // primero registrado); si todavia no tiene ningun pago (venta/compra a
@@ -320,6 +327,17 @@ export async function corteDelDia(fecha: Date) {
         metodoPago: p.metodoPago,
         fecha: p.fecha,
         registradoPor: p.registradoPor?.nombre ?? 'Registro anterior',
+      })),
+    },
+    depositosBanco: {
+      total: totalDepositosBanco,
+      cantidad: depositosBancoHoy.length,
+      detalle: depositosBancoHoy.map((d) => ({
+        id: d.id,
+        monto: Number(d.monto),
+        notas: d.notas,
+        fecha: d.fecha,
+        registradoPor: d.registradoPor?.nombre ?? 'Registro anterior',
       })),
     },
     cartera: carteraPendiente,
