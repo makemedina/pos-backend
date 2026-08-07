@@ -134,13 +134,17 @@ export async function corteDelDia(fecha: Date) {
       orderBy: { fecha: 'asc' },
     }),
     prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false } }),
+    // Se excluyen los pagos cancelados individualmente (cancelarPagoVenta)
+    // Y los pagos de una venta/compra que se cancelo COMPLETA -- si no, el
+    // corte los sigue contando como dinero cobrado aunque cancelarVenta/
+    // cancelarCompra ya revirtieron ese monto de saldoEfectivo/BancoActual.
     prisma.pagoVenta.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin } },
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false, venta: { cancelada: false } },
       include: { venta: { include: { cliente: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
     prisma.pagoCompra.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin } },
+      where: { fecha: { gte: inicioDia, lte: fin }, compra: { cancelada: false } },
       include: { compra: { include: { proveedor: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),

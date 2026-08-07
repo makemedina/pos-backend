@@ -33,10 +33,10 @@ function esMismoDia(fecha: Date, referencia: Date) {
 export async function resumenCarteraClientes() {
   const clientes = await prisma.cliente.findMany({
     where: {
-      OR: [{ ventas: { some: { esCredito: true } } }, { saldoInicial: { gt: 0 } }],
+      OR: [{ ventas: { some: { esCredito: true, cancelada: false } } }, { saldoInicial: { gt: 0 } }],
     },
     include: {
-      ventas: { where: { esCredito: true }, select: { saldoPendiente: true } },
+      ventas: { where: { esCredito: true, cancelada: false }, select: { saldoPendiente: true } },
     },
     orderBy: { nombre: 'asc' },
   });
@@ -63,6 +63,7 @@ export async function notasClienteCredito(clienteId: string, incluirPagadas: boo
     where: {
       clienteId,
       esCredito: true,
+      cancelada: false,
       ...(incluirPagadas ? {} : { saldoPendiente: { gt: 0 } }),
     },
     orderBy: { fecha: 'desc' },
