@@ -13,7 +13,8 @@ import {
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
-import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError, fechaLocalDesdeString } from '../services/corte.service';
+import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
+import { fechaLocalDesdeString } from '../utils/fecha';
 import {
   buscarClientes,
   crearClienteRapido,
@@ -133,7 +134,7 @@ router.post('/admin/cargar-inventario-inicial', requiereAdmin, async (req, res) 
     if (!Array.isArray(filas) || filas.length === 0) {
       return res.status(400).json({ error: 'Manda al menos una fila.' });
     }
-    const resultado = await cargarInventarioInicial(filas, fecha ? new Date(fecha) : undefined);
+    const resultado = await cargarInventarioInicial(filas, fecha ? fechaLocalDesdeString(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);
@@ -147,7 +148,7 @@ router.post('/admin/cargar-facturas-iniciales', requiereAdmin, async (req, res) 
     if (!Array.isArray(filas) || filas.length === 0) {
       return res.status(400).json({ error: 'Manda al menos una fila.' });
     }
-    const resultado = await cargarFacturasIniciales(filas, fecha ? new Date(fecha) : undefined);
+    const resultado = await cargarFacturasIniciales(filas, fecha ? fechaLocalDesdeString(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);
@@ -913,7 +914,7 @@ router.post('/clientes/saldos-iniciales', requiereAdmin, async (req, res) => {
     if (!Array.isArray(filas) || filas.length === 0) {
       return res.status(400).json({ error: 'Manda al menos una fila.' });
     }
-    const resultado = await cargarSaldosIniciales(filas, req.usuario!.id, fecha ? new Date(fecha) : undefined);
+    const resultado = await cargarSaldosIniciales(filas, req.usuario!.id, fecha ? fechaLocalDesdeString(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);
@@ -924,7 +925,7 @@ router.post('/clientes/saldos-iniciales', requiereAdmin, async (req, res) => {
 router.post('/clientes/migrar-saldo-inicial', requiereAdmin, async (req, res) => {
   try {
     const { fecha } = req.body;
-    const resultado = await migrarSaldoInicialANotas(req.usuario!.id, fecha ? new Date(fecha) : undefined);
+    const resultado = await migrarSaldoInicialANotas(req.usuario!.id, fecha ? fechaLocalDesdeString(fecha) : undefined);
     res.status(201).json(resultado);
   } catch (err) {
     console.error(err);

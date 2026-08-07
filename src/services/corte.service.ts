@@ -13,17 +13,6 @@ function normalizarFecha(fecha: Date) {
   return f;
 }
 
-// Convierte un string "YYYY-MM-DD" (el que mandan los <input type="date">
-// del frontend) a medianoche LOCAL de ese dia. Ojo: "new Date('2026-07-30')"
-// NO sirve para esto -- un string de solo fecha se interpreta como
-// medianoche UTC, y este servidor corre con hora local distinta a UTC
-// (Culiacan es UTC-7), asi que al pasar por normalizarFecha (que usa
-// setHours en hora LOCAL) el dia se recorria uno hacia atras.
-export function fechaLocalDesdeString(fechaStr: string): Date {
-  const [anio, mes, dia] = fechaStr.split('-').map(Number);
-  return new Date(anio, mes - 1, dia);
-}
-
 function finDelDia(inicioDia: Date) {
   const f = new Date(inicioDia);
   f.setHours(23, 59, 59, 999);

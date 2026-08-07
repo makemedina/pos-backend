@@ -1,5 +1,6 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
+import { fechaLocalDesdeString } from '../utils/fecha';
 
 interface CrearAjusteInput {
   loteId: string;
@@ -186,7 +187,7 @@ function obtenerRangoFechas(periodo: string, desde?: string, hasta?: string) {
       break;
     case 'rango': {
       if (desde) {
-        const d = new Date(desde);
+        const d = fechaLocalDesdeString(desde);
         d.setHours(0, 0, 0, 0);
         inicio.setTime(d.getTime());
       } else {
@@ -194,7 +195,7 @@ function obtenerRangoFechas(periodo: string, desde?: string, hasta?: string) {
         inicio.setHours(0, 0, 0, 0);
       }
       if (hasta) {
-        const h = new Date(hasta);
+        const h = fechaLocalDesdeString(hasta);
         h.setHours(23, 59, 59, 999);
         fin.setTime(h.getTime());
       } else {

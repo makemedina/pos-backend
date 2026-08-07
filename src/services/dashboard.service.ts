@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { fechaLocalDesdeString } from '../utils/fecha';
 
 interface DashboardFilters {
   periodo?: string;
@@ -21,7 +22,7 @@ function fechaKey(fecha: Date) {
 }
 
 function parseDate(value: string, endOfDay = false) {
-  const date = new Date(value);
+  const date = fechaLocalDesdeString(value);
   if (Number.isNaN(date.getTime())) {
     return null;
   }
