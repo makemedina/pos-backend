@@ -13,6 +13,17 @@ function normalizarFecha(fecha: Date) {
   return f;
 }
 
+// Convierte un string "YYYY-MM-DD" (el que mandan los <input type="date">
+// del frontend) a medianoche LOCAL de ese dia. Ojo: "new Date('2026-07-30')"
+// NO sirve para esto -- un string de solo fecha se interpreta como
+// medianoche UTC, y este servidor corre con hora local distinta a UTC
+// (Culiacan es UTC-7), asi que al pasar por normalizarFecha (que usa
+// setHours en hora LOCAL) el dia se recorria uno hacia atras.
+export function fechaLocalDesdeString(fechaStr: string): Date {
+  const [anio, mes, dia] = fechaStr.split('-').map(Number);
+  return new Date(anio, mes - 1, dia);
+}
+
 function finDelDia(inicioDia: Date) {
   const f = new Date(inicioDia);
   f.setHours(23, 59, 59, 999);
@@ -286,11 +297,20 @@ export async function corteDelDia(fecha: Date) {
 
   return {
     yaExisteCorteHoy: !!corteExistente,
+    // Si este dia ya tiene un corte guardado, se incluyen tambien
+    // utilidadDia/valorInventario/balanzaTotal tal como quedaron
+    // capturados ESE dia -- necesarios para que "Utilidad y balanza" al
+    // reimprimir un corte pasado muestre lo mismo que el historico, en
+    // vez de recalcular con el valor de inventario y cartera de HOY
+    // (que ya cambiaron desde entonces).
     corteExistente: corteExistente
       ? {
           id: corteExistente.id,
           efectivoContado: Number(corteExistente.efectivoContado),
           saldoBancoContado: Number(corteExistente.saldoBancoContado),
+          utilidadDia: Number(corteExistente.utilidadDia),
+          valorInventario: Number(corteExistente.valorInventario),
+          balanzaTotal: Number(corteExistente.balanzaTotal),
         }
       : null,
     inventario: inventarioMovs,

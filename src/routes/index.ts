@@ -13,7 +13,7 @@ import {
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
-import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
+import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError, fechaLocalDesdeString } from '../services/corte.service';
 import {
   buscarClientes,
   crearClienteRapido,
@@ -775,7 +775,7 @@ function ocultarUtilidadSiNoTienePermiso<T extends Record<string, any>>(req: any
 
 router.get('/corte', async (req, res) => {
   try {
-    const fecha = req.query.fecha ? new Date(req.query.fecha as string) : new Date();
+    const fecha = req.query.fecha ? fechaLocalDesdeString(req.query.fecha as string) : new Date();
     const corte = await corteDelDia(fecha);
     res.json(ocultarUtilidadSiNoTienePermiso(req, corte));
   } catch (err) {
@@ -800,7 +800,7 @@ router.post('/corte/caja', async (req, res) => {
       req.usuario!.id,
       Number(efectivoContado),
       Number(saldoBancoContado),
-      fecha ? new Date(fecha) : undefined
+      fecha ? fechaLocalDesdeString(fecha) : undefined
     );
     res.status(201).json(corte);
   } catch (err) {
