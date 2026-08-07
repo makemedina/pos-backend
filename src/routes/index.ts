@@ -64,7 +64,7 @@ import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
 import { resetearTransacciones, cargarInventarioInicial, ConfirmacionInvalidaError } from '../services/admin.service';
-import { obtenerConfiguracion, actualizarConfiguracion } from '../services/configuracion.service';
+import { obtenerConfiguracion, actualizarConfiguracion, SaldoBancoInsuficienteError } from '../services/configuracion.service';
 
 export const router = Router();
 
@@ -263,6 +263,9 @@ router.post('/gastos', async (req, res) => {
     const gasto = await crearGasto({ ...req.body, registradoPorId: req.usuario!.id });
     res.status(201).json(gasto);
   } catch (err) {
+    if (err instanceof SaldoBancoInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el gasto' });
   }
@@ -631,6 +634,9 @@ router.post('/compras', requierePermiso('puedeRegistrarCompras'), async (req, re
     });
     res.status(201).json(compra);
   } catch (err) {
+    if (err instanceof SaldoBancoInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar la compra' });
   }
@@ -644,6 +650,9 @@ router.post('/compras/:id/pagos', requierePermiso('puedeRegistrarCompras'), asyn
   } catch (err) {
     if (err instanceof MontoPagoCompraInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
+    }
+    if (err instanceof SaldoBancoInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago' });

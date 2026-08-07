@@ -1,5 +1,6 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
+import { verificarSaldoBancoSuficiente } from './configuracion.service';
 
 interface ItemCompraInput {
   varianteId: string;
@@ -61,6 +62,10 @@ export async function crearCompra(input: CrearCompraInput) {
 
     // Si hubo pago inicial, se registra como el primer abono
     if (pagoInicial > 0) {
+      if ((input.metodoPagoInicial ?? 'efectivo') === 'transferencia') {
+        await verificarSaldoBancoSuficiente(tx, pagoInicial);
+      }
+
       await tx.pagoCompra.create({
         data: {
           compraId: compra.id,
@@ -112,6 +117,10 @@ export async function registrarPagoCompra(
       throw new MontoPagoCompraInvalidoError(
         `El pago de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
       );
+    }
+
+    if (metodoPago === 'transferencia') {
+      await verificarSaldoBancoSuficiente(tx, monto);
     }
 
     await tx.pagoCompra.create({

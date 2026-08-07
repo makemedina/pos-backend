@@ -270,17 +270,29 @@ export async function crearVenta(input: CrearVentaInput) {
 export async function calcularUtilidadVenta(ventaId: string) {
   const items = await prisma.ventaItem.findMany({
     where: { ventaId },
-    include: { pagoAsignaciones: true },
+    include: {
+      pagoAsignaciones: true,
+      lote: { include: { variante: { include: { producto: true } } } },
+    },
   });
 
   let utilidadDevengada = 0;
   let utilidadCobrada = 0;
+  const itemsDetalle: {
+    producto: string;
+    marca: string;
+    cantidad: number;
+    precioUnitario: number;
+    costoUnitario: number;
+    utilidad: number;
+  }[] = [];
 
   for (const item of items) {
     const cantidad = Number(item.cantidad);
-    const subtotal = cantidad * Number(item.precioUnitario);
-    const margenItem =
-      (Number(item.precioUnitario) - Number(item.costoUnitarioSnapshot)) * cantidad;
+    const precioUnitario = Number(item.precioUnitario);
+    const costoUnitario = Number(item.costoUnitarioSnapshot);
+    const subtotal = cantidad * precioUnitario;
+    const margenItem = (precioUnitario - costoUnitario) * cantidad;
 
     const totalAsignado = item.pagoAsignaciones.reduce(
       (acc, a) => acc + Number(a.montoAsignado),
@@ -290,9 +302,18 @@ export async function calcularUtilidadVenta(ventaId: string) {
 
     utilidadDevengada += margenItem;
     utilidadCobrada += margenItem * porcentajeCobrado;
+
+    itemsDetalle.push({
+      producto: item.lote.variante.producto.nombre,
+      marca: item.lote.variante.marca,
+      cantidad,
+      precioUnitario,
+      costoUnitario,
+      utilidad: margenItem,
+    });
   }
 
-  return { utilidadDevengada, utilidadCobrada };
+  return { utilidadDevengada, utilidadCobrada, items: itemsDetalle };
 }
 
 export class VentaYaCanceladaError extends Error {

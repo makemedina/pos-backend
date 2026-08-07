@@ -1,5 +1,6 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
+import { verificarSaldoBancoSuficiente } from './configuracion.service';
 
 // Categorias tipicas de un ERP para gastos operativos de un negocio pequeno.
 // Se crean automaticamente la primera vez que se piden las categorias y
@@ -68,6 +69,10 @@ export async function crearGasto(input: {
   metodoPago: string;
 }) {
   return prisma.$transaction(async (tx) => {
+    if (input.metodoPago === 'transferencia') {
+      await verificarSaldoBancoSuficiente(tx, input.monto);
+    }
+
     const gasto = await tx.gasto.create({
       data: input,
       include: { categoria: true, registradoPor: true, proveedor: true },

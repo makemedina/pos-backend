@@ -131,12 +131,12 @@ async function aplicarPagoVenta(
     throw new MontoPagoInvalidoError(`La venta #${venta.folio} no pertenece a este cliente`);
   }
 
+  // A diferencia de un pago a proveedor, aqui NO se limita el monto al
+  // saldo pendiente: un cliente si puede pagar de mas y quedar con saldo
+  // a favor (saldoPendiente negativo), que se resta del resto de su
+  // cartera. El banco, en cambio, nunca puede quedar en negativo -- pero
+  // esto es dinero ENTRANDO (increment), asi que esa regla no aplica aqui.
   const saldoActual = Number(venta.saldoPendiente);
-  if (monto > saldoActual) {
-    throw new MontoPagoInvalidoError(
-      `El pago de $${monto.toFixed(2)} para la venta #${venta.folio} es mayor a su saldo pendiente de $${saldoActual.toFixed(2)}`
-    );
-  }
 
   const restantePorItem = venta.items.map((item) => {
     const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
@@ -150,11 +150,17 @@ async function aplicarPagoVenta(
     data: { ventaId, monto, metodoPago, registradoPorId },
   });
 
-  if (totalRestante > 0) {
+  // Si el cliente paga de mas, el excedente no se reparte entre las
+  // lineas (ya no les falta nada) -- solo se reparte hasta cubrir lo que
+  // en verdad restaba, para que calcularUtilidadVenta() nunca calcule mas
+  // del 100% cobrado por producto. El excedente queda reflejado nada mas
+  // en el saldoPendiente negativo de la nota.
+  const montoAAsignar = Math.min(monto, totalRestante);
+  if (totalRestante > 0 && montoAAsignar > 0) {
     for (const item of restantePorItem) {
       if (item.restante <= 0) continue;
       const proporcion = item.restante / totalRestante;
-      const montoAsignado = monto * proporcion;
+      const montoAsignado = montoAAsignar * proporcion;
 
       await tx.pagoAsignacion.create({
         data: {
@@ -171,7 +177,7 @@ async function aplicarPagoVenta(
   await tx.venta.update({
     where: { id: ventaId },
     data: {
-      saldoPendiente: Math.max(nuevoSaldo, 0),
+      saldoPendiente: nuevoSaldo,
       estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial',
     },
   });
@@ -190,7 +196,7 @@ async function aplicarPagoVenta(
     });
   }
 
-  return { pago, venta, saldoNotaRestante: Math.max(nuevoSaldo, 0) };
+  return { pago, venta, saldoNotaRestante: nuevoSaldo };
 }
 
 async function calcularSaldoTotalCliente(tx: Prisma.TransactionClient, clienteId: string) {
