@@ -42,6 +42,8 @@ model Usuario {
   depositosCancelados DepositoBanco[] @relation("CancelaDeposito")
   depositosAutorizadosCancelacion DepositoBanco[] @relation("AutorizaCancelacionDeposito")
   cotizacionesRegistradas Cotizacion[] @relation("VendedorCotizacion")
+  pagosVentaCancelados PagoVenta[] @relation("CancelaPagoVenta")
+  pagosVentaAutorizadosCancelacion PagoVenta[] @relation("AutorizaCancelacionPagoVenta")
   sesiones           Sesion[]
 }
 
@@ -287,6 +289,12 @@ model PagoVenta {
   metodoPago     String
   registradoPorId String?
   registradoPor  Usuario? @relation(fields: [registradoPorId], references: [id])
+  cancelado       Boolean   @default(false)
+  canceladoEn     DateTime?
+  canceladoPorId  String?
+  canceladoPor    Usuario?  @relation("CancelaPagoVenta", fields: [canceladoPorId], references: [id])
+  autorizadoPorId String?
+  autorizadoPor   Usuario?  @relation("AutorizaCancelacionPagoVenta", fields: [autorizadoPorId], references: [id])
 
   asignaciones PagoAsignacion[]
 }

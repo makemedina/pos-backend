@@ -38,7 +38,17 @@ import {
   cerrarSesion,
   LoginBloqueadoError,
 } from '../services/auth.service';
-import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, registrarPagoMultiNota, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
+import {
+  resumenCarteraClientes,
+  notasClienteCredito,
+  registrarPagoVenta,
+  registrarPagoMultiNota,
+  pagosVenta,
+  cancelarPagoVenta,
+  MontoPagoInvalidoError,
+  PagoYaCanceladoError,
+  AutorizacionCancelacionPagoInvalidaError,
+} from '../services/cartera.service';
 import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, cancelarGasto, GastoYaCanceladoError, AutorizacionCancelacionGastoInvalidaError } from '../services/gastos.service';
 import { registrarDeposito, listarDepositos, cancelarDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
 import {
@@ -1060,5 +1070,26 @@ router.post('/ventas/:id/pagos', requierePermiso('puedeRegistrarPagos'), async (
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago de la venta' });
+  }
+});
+
+router.post('/ventas/:ventaId/pagos/:pagoId/cancelar', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
+  try {
+    const { telefono, pin } = req.body || {};
+    const pago = await cancelarPagoVenta(
+      req.params.pagoId,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
+    res.json(pago);
+  } catch (err) {
+    if (err instanceof PagoYaCanceladoError) {
+      return res.status(409).json({ error: err.message, code: 'PAGO_YA_CANCELADO' });
+    }
+    if (err instanceof AutorizacionCancelacionPagoInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar el pago' });
   }
 });

@@ -1,7 +1,28 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
+import { verificarAutorizadorPorTelefono } from './auth.service';
 
 export class MontoPagoInvalidoError extends Error {}
+
+export class PagoYaCanceladoError extends Error {
+  constructor() {
+    super('Este pago ya estaba cancelado.');
+  }
+}
+
+export class AutorizacionCancelacionPagoInvalidaError extends Error {
+  constructor() {
+    super('Cancelar un pago de un dia anterior necesita autorizacion por telefono y PIN.');
+  }
+}
+
+function esMismoDia(fecha: Date, referencia: Date) {
+  return (
+    fecha.getFullYear() === referencia.getFullYear() &&
+    fecha.getMonth() === referencia.getMonth() &&
+    fecha.getDate() === referencia.getDate()
+  );
+}
 
 /**
  * Nivel 1 de Cartera: un renglon por cada cliente que alguna vez tuvo una
@@ -70,6 +91,8 @@ export async function pagosVenta(ventaId: string) {
     monto: Number(p.monto),
     metodoPago: p.metodoPago,
     fecha: p.fecha,
+    cancelado: p.cancelado,
+    canceladoEn: p.canceladoEn,
     registradoPor: { nombre: p.registradoPor?.nombre ?? 'Registro anterior' },
   }));
 }
@@ -238,5 +261,96 @@ export async function registrarPagoMultiNota(
     const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
 
     return { detalle, totalPagado, saldoTotalCliente };
+  });
+}
+
+/**
+ * Cancela un pago/abono ya registrado a una nota (por ejemplo, si se
+ * capturo mal el monto o el metodo). No se borra -- queda marcado como
+ * cancelado, para poder auditar despues. Revierte todo lo que ese pago
+ * habia movido: sube de nuevo el saldoPendiente de la venta, recalcula su
+ * estadoPago, y baja el saldo de efectivo/banco que se le habia sumado.
+ *
+ * Las PagoAsignacion de este pago (el reparto proporcional entre lineas
+ * que usa calcularUtilidadVenta) se borran -- son solo un artefacto
+ * interno para esa cuenta, no un registro que el usuario vea, y ya no
+ * aplican una vez cancelado el pago.
+ *
+ * Si el pago es de un dia distinto al de hoy, cancelarlo requiere
+ * autorizacion por telefono+PIN de un administrador, igual que con
+ * ventas, compras, gastos y depositos.
+ */
+export async function cancelarPagoVenta(
+  pagoId: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const pagoActual = await prisma.pagoVenta.findUniqueOrThrow({
+    where: { id: pagoId },
+    include: { venta: true },
+  });
+
+  if (pagoActual.cancelado) {
+    throw new PagoYaCanceladoError();
+  }
+
+  let autorizadoPorId: string | null = null;
+  if (!esMismoDia(pagoActual.fecha, new Date())) {
+    if (!autorizacion) throw new AutorizacionCancelacionPagoInvalidaError();
+    autorizadoPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadoPorId) throw new AutorizacionCancelacionPagoInvalidaError();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const monto = Number(pagoActual.monto);
+    const total = Number(pagoActual.venta.total);
+
+    await tx.pagoAsignacion.deleteMany({ where: { pagoId } });
+
+    const nuevoSaldo = Math.min(Number(pagoActual.venta.saldoPendiente) + monto, total);
+
+    await tx.venta.update({
+      where: { id: pagoActual.ventaId },
+      data: {
+        saldoPendiente: nuevoSaldo,
+        estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
+      },
+    });
+
+    if (pagoActual.metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { decrement: monto } },
+        create: { id: 'singleton', saldoBancoActual: -monto },
+      });
+    } else if (pagoActual.metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { decrement: monto } },
+        create: { id: 'singleton', saldoEfectivoActual: -monto },
+      });
+    }
+
+    const pagoCancelado = await tx.pagoVenta.update({
+      where: { id: pagoId },
+      data: {
+        cancelado: true,
+        canceladoEn: new Date(),
+        canceladoPorId: solicitadoPorId,
+        autorizadoPorId,
+      },
+      include: { registradoPor: true },
+    });
+
+    return {
+      id: pagoCancelado.id,
+      monto: Number(pagoCancelado.monto),
+      metodoPago: pagoCancelado.metodoPago,
+      fecha: pagoCancelado.fecha,
+      cancelado: pagoCancelado.cancelado,
+      canceladoEn: pagoCancelado.canceladoEn,
+      registradoPor: { nombre: pagoCancelado.registradoPor?.nombre ?? 'Registro anterior' },
+      saldoNotaRestante: nuevoSaldo,
+    };
   });
 }
