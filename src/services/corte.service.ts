@@ -299,7 +299,7 @@ export async function corteDelDia(fecha: Date) {
       cobrado: totalCobrado,
       cantidad: ventasHoy.length,
       subtotalesPorMetodo: ventasSubtotalesPorMetodo,
-      detalle: ventasOrdenadas.map(({ venta: v, metodoPago }) => ({
+      detalle: ventasOrdenadas.map(({ venta: v, metodoPago, efectivo, transferencia }) => ({
         id: v.id,
         folio: v.folio,
         cliente: v.cliente.nombre,
@@ -308,6 +308,11 @@ export async function corteDelDia(fecha: Date) {
         saldoPendiente: Number(v.saldoPendiente),
         estadoPago: v.estadoPago,
         metodoPago,
+        // Cuanto de esta venta especificamente se pago con cada metodo --
+        // relevante cuando el pago se repartio (ej. $30 efectivo + $28
+        // transferencia en la misma nota).
+        montoEfectivo: efectivo,
+        montoTransferencia: transferencia,
         fecha: v.fecha,
       })),
     },
