@@ -1,5 +1,5 @@
 import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante } from '../services/catalogo.service';
-import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor } from '../services/proveedores.service';
+import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor, eliminarProveedor, ProveedorConInformacionLigadaError } from '../services/proveedores.service';
 import { Router } from 'express';
 import {
   crearVenta,
@@ -25,6 +25,8 @@ import {
   listarClientesConSaldo,
   obtenerClienteDetalle,
   actualizarCliente,
+  eliminarCliente,
+  ClienteConInformacionLigadaError,
   ventasDeCliente,
   movimientosDeCliente,
   ultimosPreciosCliente,
@@ -472,6 +474,19 @@ router.put('/proveedores/:id', requierePermiso('puedeRegistrarCompras'), async (
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar el proveedor' });
+  }
+});
+
+router.delete('/proveedores/:id', requiereAdmin, async (req, res) => {
+  try {
+    await eliminarProveedor(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    if (err instanceof ProveedorConInformacionLigadaError) {
+      return res.status(409).json({ error: err.message, code: 'TIENE_INFORMACION_LIGADA' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar el proveedor' });
   }
 });
 
@@ -957,6 +972,19 @@ router.put('/clientes/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar el cliente' });
+  }
+});
+
+router.delete('/clientes/:id', requiereAdmin, async (req, res) => {
+  try {
+    await eliminarCliente(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    if (err instanceof ClienteConInformacionLigadaError) {
+      return res.status(409).json({ error: err.message, code: 'TIENE_INFORMACION_LIGADA' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar el cliente' });
   }
 });
 

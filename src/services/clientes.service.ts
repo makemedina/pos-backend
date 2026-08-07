@@ -1,5 +1,18 @@
 import { prisma } from '../prisma';
 
+export class ClienteConInformacionLigadaError extends Error {
+  constructor(ventas: number, cotizaciones: number, tieneSaldoInicial: boolean) {
+    const partes: string[] = [];
+    if (ventas > 0) partes.push(`${ventas} venta${ventas === 1 ? '' : 's'}`);
+    if (cotizaciones > 0) partes.push(`${cotizaciones} cotizacion${cotizaciones === 1 ? '' : 'es'}`);
+    if (tieneSaldoInicial) partes.push('saldo inicial de cartera');
+    super(
+      `Este cliente tiene ${partes.join(' y ')} registrado(s) y no se puede eliminar. ` +
+        'Si ya no lo usas, puedes dejarlo así o cambiarle el nombre.'
+    );
+  }
+}
+
 export async function buscarClientes(query: string) {
   if (!query || query.length < 2) return [];
 
@@ -208,6 +221,27 @@ interface ActualizarClienteInput {
 
 export async function actualizarCliente(clienteId: string, datos: ActualizarClienteInput) {
   return prisma.cliente.update({ where: { id: clienteId }, data: datos });
+}
+
+/**
+ * Elimina un cliente DE VERDAD (a diferencia de "cancelar", que solo
+ * marca un registro). Solo se permite si no tiene ventas, cotizaciones ni
+ * saldo inicial de cartera -- si tiene algo de eso, se advierte en vez de
+ * borrarlo (borrarlo de todos modos dejaria huerfanas esas ventas/notas).
+ */
+export async function eliminarCliente(clienteId: string) {
+  const [ventas, cotizaciones, cliente] = await Promise.all([
+    prisma.venta.count({ where: { clienteId } }),
+    prisma.cotizacion.count({ where: { clienteId } }),
+    prisma.cliente.findUniqueOrThrow({ where: { id: clienteId } }),
+  ]);
+  const tieneSaldoInicial = Number(cliente.saldoInicial) !== 0;
+
+  if (ventas > 0 || cotizaciones > 0 || tieneSaldoInicial) {
+    throw new ClienteConInformacionLigadaError(ventas, cotizaciones, tieneSaldoInicial);
+  }
+
+  await prisma.cliente.delete({ where: { id: clienteId } });
 }
 
 /** Todas las transacciones (ventas) de un cliente, con sus productos para poder filtrar por nombre/codigo. */
