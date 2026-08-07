@@ -25,6 +25,35 @@ export class CotizacionYaResueltaError extends Error {
   }
 }
 
+// Los campos Decimal de Prisma llegan como string al pasar por JSON si no
+// se convierten aqui -- eso rompia formatoMoneda() en el frontend (esperaba
+// un number). Se mapea explicitamente, igual que en historial.service.ts.
+function mapearResumen(c: {
+  id: string;
+  folio: number;
+  fecha: Date;
+  total: unknown;
+  estado: string;
+  cliente: { id: string; nombre: string; telefono: string };
+  vendedor: { nombre: string };
+  items: { varianteId: string; cantidad: unknown; precioUnitario: unknown }[];
+}) {
+  return {
+    id: c.id,
+    folio: c.folio,
+    fecha: c.fecha,
+    total: Number(c.total),
+    estado: c.estado,
+    cliente: { id: c.cliente.id, nombre: c.cliente.nombre, telefono: c.cliente.telefono },
+    vendedor: { nombre: c.vendedor.nombre },
+    items: c.items.map((i) => ({
+      varianteId: i.varianteId,
+      cantidad: Number(i.cantidad),
+      precioUnitario: Number(i.precioUnitario),
+    })),
+  };
+}
+
 /**
  * Guarda el carrito armado + cliente como una cotizacion para compartir.
  * A proposito NO toca inventario, saldos ni crea ninguna Venta -- es solo
@@ -37,7 +66,7 @@ export async function crearCotizacion(input: CrearCotizacionInput) {
 
   const total = input.items.reduce((acc, i) => acc + i.cantidad * i.precioUnitario, 0);
 
-  return prisma.cotizacion.create({
+  const cotizacion = await prisma.cotizacion.create({
     data: {
       clienteId: input.clienteId,
       vendedorId: input.vendedorId,
@@ -52,6 +81,8 @@ export async function crearCotizacion(input: CrearCotizacionInput) {
     },
     include: { cliente: true, vendedor: true, items: true },
   });
+
+  return mapearResumen(cotizacion);
 }
 
 /**
@@ -60,15 +91,17 @@ export async function crearCotizacion(input: CrearCotizacionInput) {
  * cuando el cliente regresa a comprar.
  */
 export async function listarCotizacionesPendientes() {
-  return prisma.cotizacion.findMany({
+  const cotizaciones = await prisma.cotizacion.findMany({
     where: { estado: 'enviada' },
     include: { cliente: true, vendedor: true, items: true },
     orderBy: { fecha: 'desc' },
   });
+
+  return cotizaciones.map(mapearResumen);
 }
 
 export async function obtenerCotizacion(id: string) {
-  return prisma.cotizacion.findUniqueOrThrow({
+  const cotizacion = await prisma.cotizacion.findUniqueOrThrow({
     where: { id },
     include: {
       cliente: true,
@@ -76,6 +109,28 @@ export async function obtenerCotizacion(id: string) {
       items: { include: { variante: { include: { producto: true } } } },
     },
   });
+
+  return {
+    id: cotizacion.id,
+    folio: cotizacion.folio,
+    fecha: cotizacion.fecha,
+    total: Number(cotizacion.total),
+    estado: cotizacion.estado,
+    cliente: {
+      id: cotizacion.cliente.id,
+      nombre: cotizacion.cliente.nombre,
+      telefono: cotizacion.cliente.telefono,
+    },
+    vendedor: { nombre: cotizacion.vendedor.nombre },
+    items: cotizacion.items.map((i) => ({
+      id: i.id,
+      varianteId: i.varianteId,
+      producto: i.variante.producto.nombre,
+      marca: i.variante.marca,
+      cantidad: Number(i.cantidad),
+      precioUnitario: Number(i.precioUnitario),
+    })),
+  };
 }
 
 /**
