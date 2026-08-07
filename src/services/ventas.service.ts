@@ -13,13 +13,20 @@ interface ItemVentaInput {
   motivoAutorizacion?: string;
 }
 
+interface PagoInicialInput {
+  monto: number;
+  metodoPago: string; // 'efectivo' | 'transferencia'
+}
+
 interface CrearVentaInput {
   vendedorId: string;
   clienteId: string;
   items: ItemVentaInput[];
   esCredito: boolean;
-  montoPagadoAhora: number; // 0 = credito total, = total => de contado
-  metodoPago?: string;
+  // El pago inicial se puede repartir entre varios metodos (ej. parte en
+  // efectivo y parte por transferencia) -- 0, 1 o 2 entradas. Un arreglo
+  // vacio o ausente equivale a credito total.
+  pagos?: PagoInicialInput[];
   canalTicket?: string;
 }
 
@@ -159,9 +166,12 @@ export async function crearVenta(input: CrearVentaInput) {
       }
     }
 
-    const saldoPendiente = total - input.montoPagadoAhora;
+    const pagosValidos = (input.pagos ?? []).filter((p) => p.monto > 0);
+    const montoPagadoAhora = pagosValidos.reduce((acc, p) => acc + p.monto, 0);
+
+    const saldoPendiente = total - montoPagadoAhora;
     const estadoPago =
-      saldoPendiente <= 0 ? 'pagada' : input.montoPagadoAhora > 0 ? 'parcial' : 'pendiente';
+      saldoPendiente <= 0 ? 'pagada' : montoPagadoAhora > 0 ? 'parcial' : 'pendiente';
 
     const venta = await tx.venta.create({
       data: {
@@ -192,19 +202,22 @@ export async function crearVenta(input: CrearVentaInput) {
       items.push({ ...ventaItem, subtotal: linea.subtotal });
     }
 
-    // Pago inicial: se registra y se reparte proporcional al subtotal de cada linea
-    if (input.montoPagadoAhora > 0) {
+    // Pago inicial: puede venir repartido en varios metodos (ej. parte en
+    // efectivo y parte por transferencia) -- se crea un PagoVenta por cada
+    // metodo con monto > 0, cada uno con su propio reparto proporcional
+    // entre lineas (igual que un abono normal de Cartera).
+    for (const pagoInput of pagosValidos) {
       const pago = await tx.pagoVenta.create({
         data: {
           ventaId: venta.id,
-          monto: input.montoPagadoAhora,
-          metodoPago: input.metodoPago ?? 'efectivo',
+          monto: pagoInput.monto,
+          metodoPago: pagoInput.metodoPago,
         },
       });
 
       for (const item of items) {
         const proporcion = item.subtotal / total;
-        const montoAsignado = input.montoPagadoAhora * proporcion;
+        const montoAsignado = pagoInput.monto * proporcion;
 
         await tx.pagoAsignacion.create({
           data: {
@@ -216,18 +229,17 @@ export async function crearVenta(input: CrearVentaInput) {
       }
 
       // El saldo bancario o en efectivo sube solo, segun el metodo de pago.
-      const metodo = input.metodoPago ?? 'efectivo';
-      if (metodo === 'transferencia') {
+      if (pagoInput.metodoPago === 'transferencia') {
         await tx.configuracion.upsert({
           where: { id: 'singleton' },
-          update: { saldoBancoActual: { increment: input.montoPagadoAhora } },
-          create: { id: 'singleton', saldoBancoActual: input.montoPagadoAhora },
+          update: { saldoBancoActual: { increment: pagoInput.monto } },
+          create: { id: 'singleton', saldoBancoActual: pagoInput.monto },
         });
-      } else if (metodo === 'efectivo') {
+      } else if (pagoInput.metodoPago === 'efectivo') {
         await tx.configuracion.upsert({
           where: { id: 'singleton' },
-          update: { saldoEfectivoActual: { increment: input.montoPagadoAhora } },
-          create: { id: 'singleton', saldoEfectivoActual: input.montoPagadoAhora },
+          update: { saldoEfectivoActual: { increment: pagoInput.monto } },
+          create: { id: 'singleton', saldoEfectivoActual: pagoInput.monto },
         });
       }
     }

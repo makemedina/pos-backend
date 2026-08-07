@@ -6,6 +6,12 @@ interface DashboardFilters {
   hasta?: string;
 }
 
+function sumaPagosPorMetodo(pagos: { metodoPago: string; monto: unknown }[], metodo: string) {
+  return pagos
+    .filter((p) => p.metodoPago === metodo)
+    .reduce((acc, p) => acc + Number(p.monto), 0);
+}
+
 function fechaKey(fecha: Date) {
   const d = new Date(fecha);
   const year = d.getFullYear();
@@ -152,15 +158,13 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
   const ventasCantidad = ventas.length;
   const ticketMedio = ventasCantidad > 0 ? totalVentas / ventasCantidad : 0;
 
-  // El "metodo de pago" de una venta es el de su pago inicial (el primero
-  // registrado); las que todavia no tienen ningun pago (a credito, sin
-  // abono aun) no cuentan para el porcentaje de efectivo vs transferencia.
-  const ventasEfectivo = ventas
-    .filter((v) => v.pagos[0]?.metodoPago === 'efectivo')
-    .reduce((acc, v) => acc + Number(v.total), 0);
-  const ventasTransferencia = ventas
-    .filter((v) => v.pagos[0]?.metodoPago === 'transferencia')
-    .reduce((acc, v) => acc + Number(v.total), 0);
+  // % de efectivo vs transferencia: se calcula del dinero REALMENTE
+  // cobrado por cada metodo (suma de PagoVenta.monto), no del total de la
+  // venta bajo un solo metodo "adivinado" -- un pago inicial se puede
+  // repartir entre efectivo y transferencia en la misma venta. Lo que
+  // sigue a credito sin cobrar no cuenta para este porcentaje.
+  const ventasEfectivo = ventas.reduce((acc, v) => acc + sumaPagosPorMetodo(v.pagos, 'efectivo'), 0);
+  const ventasTransferencia = ventas.reduce((acc, v) => acc + sumaPagosPorMetodo(v.pagos, 'transferencia'), 0);
   const baseConMetodoPago = ventasEfectivo + ventasTransferencia;
   const porcentajeEfectivo = baseConMetodoPago > 0 ? (ventasEfectivo / baseConMetodoPago) * 100 : 0;
 
@@ -232,9 +236,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
       const costo = Number(item.cantidad) * Number(item.costoUnitarioSnapshot);
       return acc + (subtotal - costo);
     }, 0);
-    const metodo = venta.pagos[0]?.metodoPago;
-    if (metodo === 'efectivo') dia.ventasEfectivo += Number(venta.total);
-    else if (metodo === 'transferencia') dia.ventasTransferencia += Number(venta.total);
+    dia.ventasEfectivo += sumaPagosPorMetodo(venta.pagos, 'efectivo');
+    dia.ventasTransferencia += sumaPagosPorMetodo(venta.pagos, 'transferencia');
   }
   for (const gasto of gastos) {
     obtenerDia(fechaKey(gasto.fecha)).gastos += Number(gasto.monto);

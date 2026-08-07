@@ -177,6 +177,9 @@ export async function obtenerDetalleVenta(ventaId: string) {
     cliente: { id: venta.cliente.id, nombre: venta.cliente.nombre, telefono: venta.cliente.telefono },
     vendedor: { id: venta.vendedor.id, nombre: venta.vendedor.nombre },
     metodosPago: [...new Set(venta.pagos.map((p) => p.metodoPago))],
+    // Desglose de cuanto se pago con cada metodo (un pago inicial se puede
+    // repartir entre efectivo y transferencia en la misma venta).
+    pagos: venta.pagos.map((p) => ({ metodoPago: p.metodoPago, monto: Number(p.monto) })),
     items: venta.items.map((i) => ({
       producto: i.lote.variante.producto.nombre,
       marca: i.lote.variante.marca,

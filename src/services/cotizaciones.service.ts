@@ -144,8 +144,7 @@ export async function confirmarCotizacion(
   datos: {
     vendedorId: string;
     esCredito: boolean;
-    montoPagadoAhora: number;
-    metodoPago?: string;
+    pagos?: { monto: number; metodoPago: string }[];
     autorizadoPorTelefono?: string;
     autorizadoPin?: string;
     motivoAutorizacion?: string;
@@ -164,8 +163,7 @@ export async function confirmarCotizacion(
     vendedorId: datos.vendedorId,
     clienteId: cotizacion.clienteId,
     esCredito: datos.esCredito,
-    montoPagadoAhora: datos.montoPagadoAhora,
-    metodoPago: datos.metodoPago,
+    pagos: datos.pagos,
     items: cotizacion.items.map((i) => ({
       varianteId: i.varianteId,
       cantidad: Number(i.cantidad),

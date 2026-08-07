@@ -53,6 +53,12 @@ function subtotalesPorMetodo<T>(items: T[], getMetodo: (item: T) => string | nul
   );
 }
 
+function sumaPagosPorMetodo(pagos: { metodoPago: string; monto: unknown }[], metodo: string) {
+  return pagos
+    .filter((p) => p.metodoPago === metodo)
+    .reduce((acc, p) => acc + Number(p.monto), 0);
+}
+
 /**
  * Utilidad bruta (margen de venta menos costo, por producto) y gastos
  * operativos de un dia especifico. Se usa tanto para la vista previa
@@ -193,13 +199,23 @@ export async function corteDelDia(fecha: Date) {
   const totalGastos = gastosHoy.reduce((acc, g) => acc + Number(g.monto), 0);
   const totalDepositosBanco = depositosBancoHoy.reduce((acc, d) => acc + Number(d.monto), 0);
 
-  // El "metodo de pago" de una venta/compra es el de su pago inicial (el
-  // primero registrado); si todavia no tiene ningun pago (venta/compra a
-  // credito sin abono hoy) se deja en null y se agrupa como "credito".
-  const ventasConMetodo = ventasHoy.map((v) => ({
-    venta: v,
-    metodoPago: v.pagos[0]?.metodoPago ?? null,
-  }));
+  // El pago inicial de una venta se puede repartir entre efectivo y
+  // transferencia (ej. $500 en efectivo + $300 por transferencia) -- por
+  // eso "metodoPago" aqui es una lista ("efectivo, transferencia") para
+  // mostrar, mientras que el orden/agrupado usa solo el primer metodo
+  // registrado (cosmetico). Las compras siguen siendo de un solo metodo.
+  const ventasConMetodo = ventasHoy.map((v) => {
+    const efectivo = sumaPagosPorMetodo(v.pagos, 'efectivo');
+    const transferencia = sumaPagosPorMetodo(v.pagos, 'transferencia');
+    const metodosUsados = [...new Set(v.pagos.map((p) => p.metodoPago))];
+    return {
+      venta: v,
+      metodoPago: metodosUsados.length > 0 ? metodosUsados.join(', ') : null,
+      metodoOrden: v.pagos[0]?.metodoPago ?? null,
+      efectivo,
+      transferencia,
+    };
+  });
   const comprasConMetodo = comprasHoy.map((c) => ({
     compra: c,
     metodoPago: c.pagos[0]?.metodoPago ?? null,
@@ -207,7 +223,7 @@ export async function corteDelDia(fecha: Date) {
 
   const ventasOrdenadas = ordenarPorMetodoYNombre(
     ventasConMetodo,
-    (x) => x.metodoPago,
+    (x) => x.metodoOrden,
     (x) => x.venta.cliente.nombre
   );
   const comprasOrdenadas = ordenarPorMetodoYNombre(
@@ -221,10 +237,18 @@ export async function corteDelDia(fecha: Date) {
     (p) => p.venta.cliente.nombre
   );
 
-  const ventasSubtotalesPorMetodo = subtotalesPorMetodo(
-    ventasConMetodo,
-    (x) => x.metodoPago,
-    (x) => Number(x.venta.total)
+  // Subtotales por metodo de VENTAS: se calculan del dinero realmente
+  // cobrado por cada metodo (no del total de la venta bajo un solo metodo
+  // "adivinado"), para que sumen exacto aunque un pago se haya repartido.
+  // Lo que falte del total hasta lo cobrado se cuenta como "credito".
+  const ventasSubtotalesPorMetodo = ventasConMetodo.reduce(
+    (acc, x) => {
+      acc.efectivo += x.efectivo;
+      acc.transferencia += x.transferencia;
+      acc.credito += Number(x.venta.total) - x.efectivo - x.transferencia;
+      return acc;
+    },
+    { efectivo: 0, transferencia: 0, credito: 0 }
   );
   const comprasSubtotalesPorMetodo = subtotalesPorMetodo(
     comprasConMetodo,
