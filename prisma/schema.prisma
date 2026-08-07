@@ -41,6 +41,7 @@ model Usuario {
   depositosRegistrados DepositoBanco[] @relation("RegistraDeposito")
   depositosCancelados DepositoBanco[] @relation("CancelaDeposito")
   depositosAutorizadosCancelacion DepositoBanco[] @relation("AutorizaCancelacionDeposito")
+  cotizacionesRegistradas Cotizacion[] @relation("VendedorCotizacion")
   sesiones           Sesion[]
 }
 
@@ -100,6 +101,7 @@ model Variante {
   creadoEn       DateTime @default(now())
 
   lotes      LoteInventario[]
+  cotizacionItems CotizacionItem[]
 
   @@unique([productoId, marca])
 }
@@ -189,6 +191,7 @@ model Cliente {
   fechaAlta           DateTime @default(now())
 
   ventas Venta[]
+  cotizaciones Cotizacion[]
 }
 
 // ---------- VENTAS ----------
@@ -216,11 +219,46 @@ model Venta {
 
   items VentaItem[]
   pagos PagoVenta[]
+  cotizacion Cotizacion?
 
   @@index([fecha])
   @@index([clienteId])
   @@index([vendedorId])
   @@index([estadoPago])
+}
+
+// Cotizacion: carrito armado y compartido con el cliente ANTES de
+// confirmar la venta. No toca inventario ni saldos -- es solo un
+// registro que se puede retomar despues y convertir en Venta real
+// (confirmarCotizacion reutiliza la misma logica de crearVenta).
+model Cotizacion {
+  id           String    @id @default(uuid())
+  folio        Int       @default(autoincrement())
+  clienteId    String
+  cliente      Cliente   @relation(fields: [clienteId], references: [id])
+  vendedorId   String
+  vendedor     Usuario   @relation("VendedorCotizacion", fields: [vendedorId], references: [id])
+  fecha        DateTime  @default(now())
+  total        Decimal   @db.Decimal(12, 2)
+  estado       String    @default("enviada") // enviada | confirmada | cancelada
+  confirmadaEn DateTime?
+  ventaId      String?   @unique
+  venta        Venta?    @relation(fields: [ventaId], references: [id])
+
+  items CotizacionItem[]
+
+  @@index([estado])
+  @@index([clienteId])
+}
+
+model CotizacionItem {
+  id             String     @id @default(uuid())
+  cotizacionId   String
+  cotizacion     Cotizacion @relation(fields: [cotizacionId], references: [id])
+  varianteId     String
+  variante       Variante   @relation(fields: [varianteId], references: [id])
+  cantidad       Decimal    @db.Decimal(10, 3)
+  precioUnitario Decimal    @db.Decimal(10, 2)
 }
 
 model VentaItem {

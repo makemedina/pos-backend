@@ -240,6 +240,31 @@ export async function ventasDeCliente(clienteId: string) {
   }));
 }
 
+/**
+ * Ultimo precio que se le vendio a este cliente de cada variante (por
+ * varianteId, la mas reciente primero). Se usa para sugerir precio al
+ * armar una venta nueva -- si el cliente ya compro ese producto antes,
+ * ModalAgregarProducto parte de ese precio en vez del precio de lista.
+ */
+export async function ultimosPreciosCliente(clienteId: string) {
+  const ventas = await prisma.venta.findMany({
+    where: { clienteId, cancelada: false },
+    include: { items: { include: { lote: { select: { varianteId: true } } } } },
+    orderBy: { fecha: 'desc' },
+  });
+
+  const resultado: Record<string, { precioUnitario: number; fecha: Date }> = {};
+  for (const venta of ventas) {
+    for (const item of venta.items) {
+      const varianteId = item.lote.varianteId;
+      if (!(varianteId in resultado)) {
+        resultado[varianteId] = { precioUnitario: Number(item.precioUnitario), fecha: venta.fecha };
+      }
+    }
+  }
+  return resultado;
+}
+
 /** Movimientos de cuenta: ventas generadas + pagos/abonos recibidos, en orden cronologico. */
 export async function movimientosDeCliente(clienteId: string) {
   const [ventas, pagos] = await Promise.all([

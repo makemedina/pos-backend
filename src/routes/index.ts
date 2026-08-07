@@ -26,6 +26,7 @@ import {
   actualizarCliente,
   ventasDeCliente,
   movimientosDeCliente,
+  ultimosPreciosCliente,
 } from '../services/clientes.service';
 import {
   actualizarPermisosUsuario,
@@ -40,6 +41,15 @@ import {
 import { resumenCarteraClientes, notasClienteCredito, registrarPagoVenta, registrarPagoMultiNota, pagosVenta, MontoPagoInvalidoError } from '../services/cartera.service';
 import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, cancelarGasto, GastoYaCanceladoError, AutorizacionCancelacionGastoInvalidaError } from '../services/gastos.service';
 import { registrarDeposito, listarDepositos, cancelarDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
+import {
+  crearCotizacion,
+  listarCotizacionesPendientes,
+  obtenerCotizacion,
+  confirmarCotizacion,
+  cancelarCotizacion,
+  CotizacionSinItemsError,
+  CotizacionYaResueltaError,
+} from '../services/cotizaciones.service';
 import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
@@ -487,6 +497,76 @@ router.post('/ventas', async (req, res) => {
   }
 });
 
+// ---------- COTIZACIONES ----------
+
+router.post('/cotizaciones', async (req, res) => {
+  try {
+    const cotizacion = await crearCotizacion({ ...req.body, vendedorId: req.usuario!.id });
+    res.status(201).json(cotizacion);
+  } catch (err) {
+    if (err instanceof CotizacionSinItemsError) {
+      return res.status(400).json({ error: err.message, code: 'SIN_ITEMS' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al guardar la cotizacion' });
+  }
+});
+
+router.get('/cotizaciones', async (_req, res) => {
+  try {
+    const cotizaciones = await listarCotizacionesPendientes();
+    res.json(cotizaciones);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar cotizaciones' });
+  }
+});
+
+router.get('/cotizaciones/:id', async (req, res) => {
+  try {
+    const cotizacion = await obtenerCotizacion(req.params.id);
+    res.json(cotizacion);
+  } catch (err) {
+    console.error(err);
+    res.status(404).json({ error: 'Cotizacion no encontrada' });
+  }
+});
+
+router.post('/cotizaciones/:id/confirmar', async (req, res) => {
+  try {
+    const resultado = await confirmarCotizacion(req.params.id, { ...req.body, vendedorId: req.usuario!.id });
+    res.status(201).json(resultado);
+  } catch (err) {
+    if (err instanceof CotizacionYaResueltaError) {
+      return res.status(409).json({ error: err.message, code: 'COTIZACION_YA_RESUELTA' });
+    }
+    if (err instanceof StockInsuficienteError) {
+      return res.status(409).json({ error: err.message, code: 'STOCK_INSUFICIENTE' });
+    }
+    if (err instanceof PrecioBajoCostoSinAutorizarError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    if (err instanceof ClienteSinCreditoError) {
+      return res.status(403).json({ error: err.message, code: 'CLIENTE_SIN_CREDITO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al confirmar la cotizacion' });
+  }
+});
+
+router.post('/cotizaciones/:id/cancelar', async (req, res) => {
+  try {
+    const cotizacion = await cancelarCotizacion(req.params.id);
+    res.json(cotizacion);
+  } catch (err) {
+    if (err instanceof CotizacionYaResueltaError) {
+      return res.status(409).json({ error: err.message, code: 'COTIZACION_YA_RESUELTA' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar la cotizacion' });
+  }
+});
+
 router.get('/ventas/:id/utilidad', requierePermiso('puedeVerUtilidad'), async (req, res) => {
   try {
     const utilidad = await calcularUtilidadVenta(req.params.id);
@@ -877,6 +957,16 @@ router.get('/clientes/:id/movimientos', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al obtener los movimientos del cliente' });
+  }
+});
+
+router.get('/clientes/:id/ultimos-precios', async (req, res) => {
+  try {
+    const precios = await ultimosPreciosCliente(req.params.id);
+    res.json(precios);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener los ultimos precios del cliente' });
   }
 });
 
