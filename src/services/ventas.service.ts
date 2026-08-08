@@ -52,6 +52,16 @@ export class ClienteSinCreditoError extends Error {
   }
 }
 
+// Los montos se acumulan en JS antes de guardarse como Decimal(12,2), y
+// cantidad*precioUnitario con cantidades de 3 decimales puede dejar ruido
+// de punto flotante (ej. 2.345*58 = 136.01000000000002). Prisma redondea
+// al guardar, pero estadoPago se decide ANTES de eso -- si no se redondea
+// aqui tambien, una venta pagada exacta puede quedar marcada 'parcial'
+// aunque el saldo se vea en $0.00 en pantalla.
+function redondearCentavos(valor: number): number {
+  return Math.round((valor + Number.EPSILON) * 100) / 100;
+}
+
 /**
  * Registra una venta completa:
  * 1. Por cada item, descuenta stock de los lotes mas antiguos primero (FIFO).
@@ -148,7 +158,7 @@ export async function crearVenta(input: CrearVentaInput) {
           },
         });
 
-        const subtotal = cantidadDeEsteLote * item.precioUnitario;
+        const subtotal = redondearCentavos(cantidadDeEsteLote * item.precioUnitario);
         total += subtotal;
 
         lineasCreadas.push({
@@ -166,10 +176,14 @@ export async function crearVenta(input: CrearVentaInput) {
       }
     }
 
-    const pagosValidos = (input.pagos ?? []).filter((p) => p.monto > 0);
-    const montoPagadoAhora = pagosValidos.reduce((acc, p) => acc + p.monto, 0);
+    total = redondearCentavos(total);
 
-    const saldoPendiente = total - montoPagadoAhora;
+    const pagosValidos = (input.pagos ?? []).filter((p) => p.monto > 0);
+    const montoPagadoAhora = redondearCentavos(
+      pagosValidos.reduce((acc, p) => acc + p.monto, 0)
+    );
+
+    const saldoPendiente = redondearCentavos(total - montoPagadoAhora);
     const estadoPago =
       saldoPendiente <= 0 ? 'pagada' : montoPagadoAhora > 0 ? 'parcial' : 'pendiente';
 
