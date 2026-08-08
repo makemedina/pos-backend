@@ -139,7 +139,11 @@ export async function corteDelDia(fecha: Date) {
       include: { proveedor: true, pagos: { orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
-    prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false } }),
+    prisma.gasto.findMany({
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false },
+      include: { categoria: true, proveedor: true, registradoPor: true },
+      orderBy: { fecha: 'asc' },
+    }),
     // Se excluyen los pagos cancelados individualmente (cancelarPagoVenta)
     // Y los pagos de una venta/compra que se cancelo COMPLETA -- si no, el
     // corte los sigue contando como dinero cobrado aunque cancelarVenta/
@@ -230,6 +234,16 @@ export async function corteDelDia(fecha: Date) {
     comprasConMetodo,
     (x) => x.metodoPago,
     (x) => x.compra.proveedor.nombre
+  );
+  const gastosOrdenados = ordenarPorMetodoYNombre(
+    gastosHoy,
+    (g) => g.metodoPago,
+    (g) => g.concepto
+  );
+  const gastosSubtotalesPorMetodo = subtotalesPorMetodo(
+    gastosHoy,
+    (g) => g.metodoPago,
+    (g) => Number(g.monto)
   );
   const pagosClientesOrdenados = ordenarPorMetodoYNombre(
     pagosClientesHoy,
@@ -340,7 +354,21 @@ export async function corteDelDia(fecha: Date) {
         fecha: c.fecha,
       })),
     },
-    gastos: { total: totalGastos, cantidad: gastosHoy.length },
+    gastos: {
+      total: totalGastos,
+      cantidad: gastosHoy.length,
+      subtotalesPorMetodo: gastosSubtotalesPorMetodo,
+      detalle: gastosOrdenados.map((g) => ({
+        id: g.id,
+        concepto: g.concepto,
+        categoria: g.categoria.nombre,
+        proveedor: g.proveedor?.nombre ?? null,
+        monto: Number(g.monto),
+        metodoPago: g.metodoPago,
+        fecha: g.fecha,
+        registradoPor: g.registradoPor?.nombre ?? 'Registro anterior',
+      })),
+    },
     pagosClientes: {
       total: totalPagosClientes,
       efectivo: pagosClientesEfectivo,
