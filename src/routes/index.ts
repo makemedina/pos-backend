@@ -68,6 +68,7 @@ import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historia
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
 import { resetearTransacciones, cargarInventarioInicial, ConfirmacionInvalidaError } from '../services/admin.service';
 import { obtenerConfiguracion, actualizarConfiguracion, SaldoBancoInsuficienteError } from '../services/configuracion.service';
+import { crearBackup, listarBackups, descargarBackup, eliminarBackup, restaurarBackup, BackupNoConfiguradoError } from '../services/backup.service';
 
 export const router = Router();
 
@@ -155,6 +156,89 @@ router.post('/admin/cargar-facturas-iniciales', requiereAdmin, async (req, res) 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al cargar las facturas iniciales' });
+  }
+});
+
+// ---------- RESPALDOS (pg_dump completo, subido a Cloudflare R2) ----------
+
+router.post('/admin/backups', requiereAdmin, async (_req, res) => {
+  try {
+    const info = await crearBackup('manual');
+    res.status(201).json(info);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al crear el respaldo' });
+  }
+});
+
+router.get('/admin/backups', requiereAdmin, async (_req, res) => {
+  try {
+    const lista = await listarBackups();
+    res.json(lista);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar los respaldos' });
+  }
+});
+
+router.get('/admin/backups/descargar', requiereAdmin, async (req, res) => {
+  try {
+    const key = req.query.key as string;
+    if (!key) return res.status(400).json({ error: 'Falta el respaldo a descargar.' });
+    const stream = await descargarBackup(key);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
+    stream.pipe(res);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al descargar el respaldo' });
+  }
+});
+
+router.delete('/admin/backups', requiereAdmin, async (req, res) => {
+  try {
+    const key = req.query.key as string;
+    if (!key) return res.status(400).json({ error: 'Falta el respaldo a eliminar.' });
+    await eliminarBackup(key);
+    res.status(204).send();
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar el respaldo' });
+  }
+});
+
+// Restaurar reemplaza TODA la base de datos con lo que traiga el
+// respaldo elegido -- por eso exige la misma confirmacion explicita por
+// escrito que ya se usa para "reiniciar transacciones", y crea un
+// respaldo de seguridad "pre-restauracion" automaticamente antes de
+// tocar nada (ver backup.service.ts).
+router.post('/admin/backups/restaurar', requiereAdmin, async (req, res) => {
+  try {
+    const { key, confirmacion } = req.body || {};
+    if (!key) return res.status(400).json({ error: 'Falta el respaldo a restaurar.' });
+    if (confirmacion !== 'RESTAURAR') {
+      return res.status(400).json({ error: 'Escribe RESTAURAR para confirmar.', code: 'CONFIRMACION_INVALIDA' });
+    }
+    await restaurarBackup(key);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: (err as Error).message || 'Error al restaurar el respaldo' });
   }
 });
 

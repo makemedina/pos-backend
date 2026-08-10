@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { router } from './routes';
+import { iniciarTareasProgramadas } from './cron';
 
 dotenv.config();
 
@@ -29,4 +30,5 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
+  iniciarTareasProgramadas();
 });// forzar rebuild 1785825302
