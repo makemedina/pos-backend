@@ -206,8 +206,8 @@ router.post('/admin/backups', requiereAdmin, async (_req, res) => {
     if (err instanceof BackupNoConfiguradoError) {
       return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'Error al crear el respaldo' });
+    console.error('[backup] Fallo al crear:', err);
+    res.status(500).json({ error: (err as Error).message || 'Error al crear el respaldo' });
   }
 });
 
@@ -219,8 +219,8 @@ router.get('/admin/backups', requiereAdmin, async (_req, res) => {
     if (err instanceof BackupNoConfiguradoError) {
       return res.status(503).json({ error: err.message, code: 'BACKUP_NO_CONFIGURADO' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'Error al listar los respaldos' });
+    console.error('[backup] Fallo al listar:', err);
+    res.status(500).json({ error: (err as Error).message || 'Error al listar los respaldos' });
   }
 });
 
