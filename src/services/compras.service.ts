@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente } from './configuracion.service';
@@ -96,6 +97,76 @@ export async function crearCompra(input: CrearCompraInput) {
 }
 
 /**
+ * Aplica un abono a UNA compra DENTRO de una transaccion ya abierta por el
+ * llamador (para reutilizar esta logica tanto para un pago a una sola
+ * factura como para un pago repartido entre varias facturas del mismo
+ * proveedor). A diferencia de un pago de cliente, aqui SI se limita el
+ * monto al saldo pendiente -- no tiene sentido "sobrepagarle" a un
+ * proveedor una factura especifica.
+ */
+async function aplicarPagoCompra(
+  tx: Prisma.TransactionClient,
+  compraId: string,
+  monto: number,
+  metodoPago: string,
+  registradoPorId: string,
+  proveedorIdEsperado?: string
+) {
+  if (!monto || monto <= 0) {
+    throw new MontoPagoCompraInvalidoError('El monto del pago debe ser mayor a cero');
+  }
+
+  const compra = await tx.compra.findUniqueOrThrow({ where: { id: compraId } });
+
+  if (proveedorIdEsperado && compra.proveedorId !== proveedorIdEsperado) {
+    throw new MontoPagoCompraInvalidoError(
+      `La factura ${compra.numeroFactura || compra.id} no pertenece a este proveedor`
+    );
+  }
+
+  const saldoActual = Number(compra.saldoPendiente);
+  if (monto > saldoActual) {
+    throw new MontoPagoCompraInvalidoError(
+      `El pago de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
+    );
+  }
+
+  if (metodoPago === 'transferencia') {
+    await verificarSaldoBancoSuficiente(tx, monto);
+  }
+
+  await tx.pagoCompra.create({
+    data: { compraId, monto, metodoPago, registradoPorId },
+  });
+
+  if (metodoPago === 'transferencia') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoBancoActual: { decrement: monto } },
+      create: { id: 'singleton', saldoBancoActual: -monto },
+    });
+  } else if (metodoPago === 'efectivo') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoEfectivoActual: { decrement: monto } },
+      create: { id: 'singleton', saldoEfectivoActual: -monto },
+    });
+  }
+
+  const nuevoSaldo = saldoActual - monto;
+
+  const compraActualizada = await tx.compra.update({
+    where: { id: compraId },
+    data: {
+      saldoPendiente: nuevoSaldo,
+      estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial',
+    },
+  });
+
+  return { compra: compraActualizada, saldoFacturaRestante: nuevoSaldo };
+}
+
+/**
  * Registra un pago (total o parcial) sobre una compra existente.
  * Recalcula saldo pendiente y estado de pago. Guarda quien lo registro
  * (tomado de la sesion, nunca del body) para el historial de abonos.
@@ -106,51 +177,57 @@ export async function registrarPagoCompra(
   metodoPago: string,
   registradoPorId: string
 ) {
-  if (!monto || monto <= 0) {
-    throw new MontoPagoCompraInvalidoError('El monto del pago debe ser mayor a cero');
+  return prisma.$transaction(async (tx) => {
+    const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId);
+    return compra;
+  });
+}
+
+export interface AsignacionPagoMultipleCompra {
+  compraId: string;
+  monto: number;
+}
+
+/**
+ * Registra UN pago que se le entrega a un proveedor y que se reparte
+ * entre varias de sus facturas pendientes, con el monto especifico que se
+ * le asigna a cada una. Mismo patron que registrarPagoMultiNota() del
+ * lado de clientes: todo en una sola transaccion, todo o nada.
+ */
+export async function registrarPagoMultiCompra(
+  proveedorId: string,
+  asignaciones: AsignacionPagoMultipleCompra[],
+  metodoPago: string,
+  registradoPorId: string
+) {
+  const asignacionesValidas = asignaciones.filter((a) => a.monto > 0);
+  if (asignacionesValidas.length === 0) {
+    throw new MontoPagoCompraInvalidoError('Debes asignar un monto mayor a cero a al menos una factura');
   }
 
   return prisma.$transaction(async (tx) => {
-    const compra = await tx.compra.findUniqueOrThrow({ where: { id: compraId } });
+    const detalle: { compraId: string; numeroFactura: string | null; monto: number; saldoFacturaRestante: number }[] = [];
+    let totalPagado = 0;
 
-    const saldoActual = Number(compra.saldoPendiente);
-    if (monto > saldoActual) {
-      throw new MontoPagoCompraInvalidoError(
-        `El pago de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
+    for (const asignacion of asignacionesValidas) {
+      const { compra, saldoFacturaRestante } = await aplicarPagoCompra(
+        tx,
+        asignacion.compraId,
+        asignacion.monto,
+        metodoPago,
+        registradoPorId,
+        proveedorId
       );
-    }
-
-    if (metodoPago === 'transferencia') {
-      await verificarSaldoBancoSuficiente(tx, monto);
-    }
-
-    await tx.pagoCompra.create({
-      data: { compraId, monto, metodoPago, registradoPorId },
-    });
-
-    if (metodoPago === 'transferencia') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoBancoActual: { decrement: monto } },
-        create: { id: 'singleton', saldoBancoActual: -monto },
-      });
-    } else if (metodoPago === 'efectivo') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoEfectivoActual: { decrement: monto } },
-        create: { id: 'singleton', saldoEfectivoActual: -monto },
+      totalPagado += asignacion.monto;
+      detalle.push({
+        compraId: asignacion.compraId,
+        numeroFactura: compra.numeroFactura,
+        monto: asignacion.monto,
+        saldoFacturaRestante,
       });
     }
 
-    const nuevoSaldo = saldoActual - monto;
-
-    return tx.compra.update({
-      where: { id: compraId },
-      data: {
-        saldoPendiente: nuevoSaldo,
-        estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial',
-      },
-    });
+    return { detalle, totalPagado };
   });
 }
 

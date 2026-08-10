@@ -11,7 +11,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
@@ -809,6 +809,35 @@ router.post('/compras/:id/pagos', requierePermiso('puedeRegistrarCompras'), asyn
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago' });
+  }
+});
+
+router.post('/proveedores/:id/pagos', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+  try {
+    const { asignaciones, metodoPago } = req.body;
+    if (!Array.isArray(asignaciones) || asignaciones.length === 0) {
+      return res.status(400).json({ error: 'Debes enviar al menos una asignacion de pago', code: 'MONTO_INVALIDO' });
+    }
+    const asignacionesNormalizadas = asignaciones.map((a: any) => ({
+      compraId: String(a.compraId),
+      monto: Number(a.monto),
+    }));
+    const resultado = await registrarPagoMultiCompra(
+      req.params.id,
+      asignacionesNormalizadas,
+      metodoPago,
+      req.usuario!.id
+    );
+    res.status(201).json(resultado);
+  } catch (err) {
+    if (err instanceof MontoPagoCompraInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
+    }
+    if (err instanceof SaldoBancoInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar el pago repartido entre facturas' });
   }
 });
 
