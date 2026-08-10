@@ -2,6 +2,10 @@
 # hay Dockerfile). Por default Nixpacks solo instala lo que un proyecto
 # Node necesita -- pg_dump/pg_restore (usados por el sistema de respaldos,
 # src/services/backup.service.ts) requieren el cliente de PostgreSQL, que
-# hay que pedir explicitamente aqui.
+# hay que pedir explicitamente aqui. Se usa nixPkgs (no aptPkgs): el
+# paquete Nix se resuelve del cache de Nix en el build, mientras que
+# aptPkgs depende de acceso de red a los repos de Debian durante el build
+# y puede fallar en silencio -- eso dejo el binario ausente en produccion
+# (spawn pg_dump ENOENT) aunque el build "terminara bien".
 [phases.setup]
-aptPkgs = ["postgresql-client"]
+nixPkgs = ["postgresql"]
