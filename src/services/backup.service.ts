@@ -17,7 +17,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 
 const PREFIJO = 'respaldos/';
 
-export type TipoBackup = 'manual' | 'automatico' | 'pre-restauracion';
+export type TipoBackup = 'manual' | 'automatico' | 'pre-restauracion' | 'pre-reset';
 
 export interface BackupInfo {
   key: string;

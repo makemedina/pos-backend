@@ -66,7 +66,13 @@ import {
 import { obtenerDashboard } from '../services/dashboard.service';
 import { listarHistorialVentas, obtenerDetalleVenta } from '../services/historial.service';
 import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth';
-import { resetearTransacciones, cargarInventarioInicial, ConfirmacionInvalidaError } from '../services/admin.service';
+import {
+  ejecutarReset,
+  cargarInventarioInicial,
+  ConfirmacionInvalidaError,
+  DependenciaResetInvalidaError,
+  type OpcionesReset,
+} from '../services/admin.service';
 import { obtenerConfiguracion, actualizarConfiguracion, SaldoBancoInsuficienteError } from '../services/configuracion.service';
 import { crearBackup, listarBackups, descargarBackup, eliminarBackup, restaurarBackup, BackupNoConfiguradoError } from '../services/backup.service';
 
@@ -120,14 +126,35 @@ router.put('/configuracion', requiereAdmin, async (req, res) => {
 
 router.post('/admin/resetear-transacciones', requiereAdmin, async (req, res) => {
   try {
-    await resetearTransacciones(req.body?.confirmacion || '');
-    res.json({ ok: true });
+    const confirmacion = req.body?.confirmacion || '';
+    const opciones = (req.body?.opciones || {}) as OpcionesReset;
+    if (confirmacion !== 'BORRAR TODO') {
+      throw new ConfirmacionInvalidaError();
+    }
+
+    // Red de seguridad automatica antes de borrar nada: si los respaldos
+    // no estan configurados en este ambiente, se sigue permitiendo el
+    // reset (igual que el backup automatico de medianoche lo omite en
+    // ese caso), pero se avisa en la respuesta para que el admin lo sepa.
+    let respaldoCreado = false;
+    try {
+      await crearBackup('pre-reset');
+      respaldoCreado = true;
+    } catch (err) {
+      if (!(err instanceof BackupNoConfiguradoError)) throw err;
+    }
+
+    await ejecutarReset(confirmacion, opciones);
+    res.json({ ok: true, respaldoCreado });
   } catch (err) {
     if (err instanceof ConfirmacionInvalidaError) {
       return res.status(400).json({ error: err.message, code: 'CONFIRMACION_INVALIDA' });
     }
+    if (err instanceof DependenciaResetInvalidaError) {
+      return res.status(400).json({ error: err.message, code: 'DEPENDENCIA_INVALIDA' });
+    }
     console.error(err);
-    res.status(500).json({ error: 'Error al resetear las transacciones' });
+    res.status(500).json({ error: 'Error al resetear los datos' });
   }
 });
 
