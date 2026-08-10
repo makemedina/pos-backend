@@ -7,5 +7,9 @@
 # aptPkgs depende de acceso de red a los repos de Debian durante el build
 # y puede fallar en silencio -- eso dejo el binario ausente en produccion
 # (spawn pg_dump ENOENT) aunque el build "terminara bien".
+#
+# El "..." es obligatorio: sin el, esta lista REEMPLAZA por completo la
+# que Nixpacks detecta automaticamente para el proyecto (nodejs, npm),
+# no se le agrega -- eso causo un build roto ("npm: command not found").
 [phases.setup]
-nixPkgs = ["postgresql"]
+nixPkgs = ["...", "postgresql"]
