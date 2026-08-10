@@ -11,5 +11,12 @@
 # El "..." es obligatorio: sin el, esta lista REEMPLAZA por completo la
 # que Nixpacks detecta automaticamente para el proyecto (nodejs, npm),
 # no se le agrega -- eso causo un build roto ("npm: command not found").
+#
+# Se pide postgresql_18 (version especifica) y no "postgresql" (generico)
+# porque pg_dump se niega a correr contra un servidor de version MAYOR a
+# la suya -- el paquete generico resolvio en 17.2 mientras que Postgres de
+# Railway corre 18.4, y eso truena con "aborting because of server
+# version mismatch". Si Railway llega a subir de major version otra vez,
+# este numero hay que actualizarlo junto con el.
 [phases.setup]
-nixPkgs = ["...", "postgresql"]
+nixPkgs = ["...", "postgresql_18"]
