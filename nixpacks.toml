@@ -1,22 +1,31 @@
 # Railway usa Nixpacks para construir este servicio automaticamente (no
-# hay Dockerfile). Por default Nixpacks solo instala lo que un proyecto
-# Node necesita -- pg_dump/pg_restore (usados por el sistema de respaldos,
+# hay Dockerfile). pg_dump/pg_restore (usados por el sistema de respaldos,
 # src/services/backup.service.ts) requieren el cliente de PostgreSQL, que
-# hay que pedir explicitamente aqui. Se usa nixPkgs (no aptPkgs): el
-# paquete Nix se resuelve del cache de Nix en el build, mientras que
-# aptPkgs depende de acceso de red a los repos de Debian durante el build
-# y puede fallar en silencio -- eso dejo el binario ausente en produccion
-# (spawn pg_dump ENOENT) aunque el build "terminara bien".
+# no viene por default -- hay que pedirlo explicitamente aqui.
 #
-# El "..." es obligatorio: sin el, esta lista REEMPLAZA por completo la
-# que Nixpacks detecta automaticamente para el proyecto (nodejs, npm),
-# no se le agrega -- eso causo un build roto ("npm: command not found").
+# Se usa nixPkgs (no aptPkgs): aptPkgs depende de acceso de red a los
+# repos de Debian durante el build y puede fallar en silencio, dejando el
+# binario ausente en produccion sin que el build se marque como fallido.
 #
-# Se pide postgresql_18 (version especifica) y no "postgresql" (generico)
+# Se pide postgresql_18 (version especifica, no el generico "postgresql")
 # porque pg_dump se niega a correr contra un servidor de version MAYOR a
-# la suya -- el paquete generico resolvio en 17.2 mientras que Postgres de
-# Railway corre 18.4, y eso truena con "aborting because of server
-# version mismatch". Si Railway llega a subir de major version otra vez,
-# este numero hay que actualizarlo junto con el.
+# la suya, y el Postgres de Railway corre 18.x.
+#
+# El archive de nixpkgs que trae Nixpacks por default no tiene
+# postgresql_18 todavia, asi que se fija un commit mas reciente
+# (nixos-25.11, 2026-06-30) que si lo tiene. Al cambiar de archive, los
+# paquetes que Nixpacks detecta automaticamente para el proyecto
+# (nodejs_18, npm-9_x) dejan de existir con esos nombres en el nuevo
+# archive -- por eso se listan explicitamente en vez de extender el
+# default: nodejs_22 (LTS vigente; el proyecto no fija version en
+# package.json, y trae su propio npm) y openssl (lo necesita el motor de
+# Prisma). Los 3 nombres (nodejs_22, openssl, postgresql_18) fueron
+# verificados contra este mismo commit antes de usarlos.
+#
+# Si Railway vuelve a subir la version mayor de Postgres, o si nixpkgs
+# deja de tener postgresql_18 en un archive mas nuevo, hay que repetir
+# este proceso: buscar un commit de nixpkgs que tenga la version de
+# Postgres que haga falta.
 [phases.setup]
-nixPkgs = ["...", "postgresql_18"]
+nixpkgsArchive = "b6018f87da91d19d0ab4cf979885689b469cdd41"
+nixPkgs = ["nodejs_22", "openssl", "postgresql_18"]
