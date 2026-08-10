@@ -1,5 +1,35 @@
 import { prisma } from '../prisma';
 
+export class NombreProductoInvalidoError extends Error {
+  constructor() {
+    super('El nombre no puede quedar vacío.');
+  }
+}
+
+export class NombreProductoDuplicadoError extends Error {
+  constructor() {
+    super('Ya existe otro producto con ese nombre.');
+  }
+}
+
+/**
+ * Cambia el nombre de un producto (ej. corregir un error de captura).
+ * Como crearVarianteRapida() ya trata el nombre como unico (busca por
+ * nombre antes de crear uno nuevo), aqui se aplica la misma regla: no se
+ * permite dejarlo igual al de OTRO producto ya existente.
+ */
+export async function actualizarProducto(id: string, nombre: string) {
+  const nombreLimpio = (nombre ?? '').trim();
+  if (!nombreLimpio) throw new NombreProductoInvalidoError();
+
+  const existente = await prisma.producto.findFirst({
+    where: { nombre: { equals: nombreLimpio, mode: 'insensitive' }, id: { not: id } },
+  });
+  if (existente) throw new NombreProductoDuplicadoError();
+
+  return prisma.producto.update({ where: { id }, data: { nombre: nombreLimpio } });
+}
+
 export async function buscarProductos(query: string) {
   if (!query || query.length < 2) return [];
 

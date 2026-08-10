@@ -1,4 +1,4 @@
-import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante } from '../services/catalogo.service';
+import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante, actualizarProducto, NombreProductoInvalidoError, NombreProductoDuplicadoError } from '../services/catalogo.service';
 import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor, eliminarProveedor, ProveedorConInformacionLigadaError } from '../services/proveedores.service';
 import { Router } from 'express';
 import {
@@ -493,6 +493,22 @@ router.get('/catalogo/productos/:id/variantes', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al buscar variantes del producto' });
+  }
+});
+
+router.put('/catalogo/productos/:id', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+  try {
+    const producto = await actualizarProducto(req.params.id, req.body.nombre);
+    res.json(producto);
+  } catch (err) {
+    if (err instanceof NombreProductoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'NOMBRE_INVALIDO' });
+    }
+    if (err instanceof NombreProductoDuplicadoError) {
+      return res.status(409).json({ error: err.message, code: 'NOMBRE_DUPLICADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar el producto' });
   }
 });
 
