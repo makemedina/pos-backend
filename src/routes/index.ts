@@ -136,12 +136,21 @@ router.post('/admin/resetear-transacciones', requiereAdmin, async (req, res) => 
     // no estan configurados en este ambiente, se sigue permitiendo el
     // reset (igual que el backup automatico de medianoche lo omite en
     // ese caso), pero se avisa en la respuesta para que el admin lo sepa.
+    // Si SI estan configurados pero el respaldo falla por otra razon
+    // (pg_dump, R2, etc.), se aborta sin borrar nada -- mejor no arriesgar
+    // un borrado sin red de seguridad que fallar aqui.
     let respaldoCreado = false;
     try {
       await crearBackup('pre-reset');
       respaldoCreado = true;
     } catch (err) {
-      if (!(err instanceof BackupNoConfiguradoError)) throw err;
+      if (err instanceof BackupNoConfiguradoError) {
+        // sin red de seguridad disponible, mismo criterio que el cron
+      } else {
+        console.error('[reset] Fallo el respaldo previo, se aborta sin borrar nada:', err);
+        const detalle = err instanceof Error ? err.message : String(err);
+        return res.status(500).json({ error: `No se pudo crear el respaldo previo, no se borró nada: ${detalle}` });
+      }
     }
 
     await ejecutarReset(confirmacion, opciones);
@@ -153,8 +162,9 @@ router.post('/admin/resetear-transacciones', requiereAdmin, async (req, res) => 
     if (err instanceof DependenciaResetInvalidaError) {
       return res.status(400).json({ error: err.message, code: 'DEPENDENCIA_INVALIDA' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'Error al resetear los datos' });
+    console.error('[reset] Fallo el borrado:', err);
+    const detalle = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: `Error al resetear los datos: ${detalle}` });
   }
 });
 
