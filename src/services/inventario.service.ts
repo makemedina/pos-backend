@@ -2,6 +2,9 @@ import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 
+// A partir de cuantos dias en stock un lote se considera critico (viejo).
+export const DIAS_CRITICO_ANTIGUEDAD = 15;
+
 interface CrearAjusteInput {
   loteId: string;
   solicitadoPorId: string;
@@ -315,4 +318,53 @@ export async function detalleMovimientosInventario(filtros: FiltrosMovimientosDe
   };
 
   return { resumen, movimientos };
+}
+
+export interface LoteAntiguo {
+  id: string;
+  producto: string;
+  marca: string;
+  proveedor: string;
+  cantidadDisponible: number;
+  costoUnitario: number;
+  valorEnStock: number;
+  fechaIngreso: Date;
+  diasEnStock: number;
+  critico: boolean;
+}
+
+/**
+ * Reporte de antiguedad de stock: todos los lotes que todavia tienen
+ * cantidad disponible, ordenados del mas viejo al mas nuevo, marcando
+ * "critico" a los que llevan mas de DIAS_CRITICO_ANTIGUEDAD dias sin
+ * venderse -- mercancia que se queda parada es la que se echa a perder o
+ * pierde valor primero.
+ */
+export async function reporteAntiguedadStock(): Promise<LoteAntiguo[]> {
+  const lotes = await prisma.loteInventario.findMany({
+    where: { cantidadDisponible: { gt: 0 }, compra: { cancelada: false } },
+    include: { variante: { include: { producto: true } }, compra: { include: { proveedor: true } } },
+    orderBy: { fechaIngreso: 'asc' },
+  });
+
+  const ahora = Date.now();
+  const unDiaMs = 1000 * 60 * 60 * 24;
+
+  return lotes.map((l) => {
+    const diasEnStock = Math.floor((ahora - l.fechaIngreso.getTime()) / unDiaMs);
+    const cantidadDisponible = Number(l.cantidadDisponible);
+    const costoUnitario = Number(l.costoUnitario);
+    return {
+      id: l.id,
+      producto: l.variante.producto.nombre,
+      marca: l.variante.marca,
+      proveedor: l.compra.proveedor.nombre,
+      cantidadDisponible,
+      costoUnitario,
+      valorEnStock: cantidadDisponible * costoUnitario,
+      fechaIngreso: l.fechaIngreso,
+      diasEnStock,
+      critico: diasEnStock > DIAS_CRITICO_ANTIGUEDAD,
+    };
+  });
 }

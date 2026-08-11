@@ -320,6 +320,7 @@ export async function corteDelDia(fecha: Date) {
           utilidadDia: Number(corteExistente.utilidadDia),
           valorInventario: Number(corteExistente.valorInventario),
           balanzaTotal: Number(corteExistente.balanzaTotal),
+          observacion: corteExistente.observacion,
         }
       : null,
     inventario: inventarioMovs,
@@ -472,7 +473,8 @@ export async function guardarCorteCaja(
   registradoPorId: string,
   efectivoContado: number,
   saldoBancoContado: number,
-  fechaCorte?: Date
+  fechaCorte?: Date,
+  observacion?: string
 ) {
   const hoy = normalizarFecha(fechaCorte ?? new Date());
   const fin = finDelDia(hoy);
@@ -523,6 +525,7 @@ export async function guardarCorteCaja(
         gastosDia,
         valorInventario,
         balanzaTotal,
+        observacion: observacion?.trim() || null,
       },
     });
   } catch (err: any) {
@@ -567,6 +570,7 @@ export async function listarCortes() {
       diferenciaCuadre,
       registradoPor: c.registradoPor.nombre,
       actualizadoEn: c.actualizadoEn,
+      observacion: c.observacion,
     };
   });
 
@@ -575,18 +579,20 @@ export async function listarCortes() {
 
 /**
  * Corrige un corte ya guardado (por si se contó mal el efectivo o el
- * banco). Solo se permite ajustar esos dos campos -- utilidad, gastos y
- * balanza quedan como la fotografia calculada el dia que se cerro, no
- * se recalculan con esta correccion.
+ * banco, o para agregar/editar la observacion despues de ver que no
+ * cuadro). Efectivo y banco son opcionales de verdad-cambiar -- utilidad,
+ * gastos y balanza quedan como la fotografia calculada el dia que se
+ * cerro, no se recalculan con esta correccion.
  */
 export async function actualizarCorteCaja(
   id: string,
   efectivoContado: number,
-  saldoBancoContado: number
+  saldoBancoContado: number,
+  observacion?: string
 ) {
   return prisma.corteCaja.update({
     where: { id },
-    data: { efectivoContado, saldoBancoContado },
+    data: { efectivoContado, saldoBancoContado, observacion: observacion?.trim() || null },
   });
 }
 

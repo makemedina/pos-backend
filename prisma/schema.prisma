@@ -440,6 +440,11 @@ model CorteCaja {
   gastosDia         Decimal  @db.Decimal(12, 2) @default(0)
   valorInventario   Decimal  @db.Decimal(12, 2) @default(0)
   balanzaTotal      Decimal  @db.Decimal(12, 2) @default(0)
+  // Nota libre para cuando el corte no cuadra y ya se sabe (o se sospecha)
+  // por que -- para no tener que acordarse despues, queda grabada con el
+  // corte y se puede agregar/editar tanto al capturarlo como despues
+  // desde el historico.
+  observacion       String?
 
   @@unique([fecha])
 }

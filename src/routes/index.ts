@@ -12,7 +12,7 @@ import {
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
-import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
+import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 import {
@@ -955,6 +955,16 @@ router.get('/inventario/movimientos', requierePermiso('puedeVerCostos'), async (
   }
 });
 
+router.get('/inventario/antiguedad-stock', requierePermiso('puedeVerCostos'), async (_req, res) => {
+  try {
+    const reporte = await reporteAntiguedadStock();
+    res.json(reporte);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar la antigüedad del stock' });
+  }
+});
+
 // ---------- CORTE DIARIO ----------
 
 function ocultarUtilidadSiNoTienePermiso<T extends Record<string, any>>(req: any, dato: T): T {
@@ -977,7 +987,7 @@ router.get('/corte', async (req, res) => {
 
 router.post('/corte/caja', async (req, res) => {
   try {
-    const { efectivoContado, saldoBancoContado, fecha } = req.body;
+    const { efectivoContado, saldoBancoContado, fecha, observacion } = req.body;
 
     // Elegir una fecha distinta a "hoy" es para casos especiales (como
     // capturar el punto de partida de ayer al arrancar el sistema) --
@@ -991,7 +1001,8 @@ router.post('/corte/caja', async (req, res) => {
       req.usuario!.id,
       Number(efectivoContado),
       Number(saldoBancoContado),
-      fecha ? fechaLocalDesdeString(fecha) : undefined
+      fecha ? fechaLocalDesdeString(fecha) : undefined,
+      observacion
     );
     res.status(201).json(corte);
   } catch (err) {
@@ -1017,8 +1028,8 @@ router.get('/corte/historial', async (req, res) => {
 // Editar un corte pasado (corregir el conteo) es sensible -- solo administrador.
 router.put('/corte/caja/:id', requiereAdmin, async (req, res) => {
   try {
-    const { efectivoContado, saldoBancoContado } = req.body;
-    const corte = await actualizarCorteCaja(req.params.id, Number(efectivoContado), Number(saldoBancoContado));
+    const { efectivoContado, saldoBancoContado, observacion } = req.body;
+    const corte = await actualizarCorteCaja(req.params.id, Number(efectivoContado), Number(saldoBancoContado), observacion);
     res.json(corte);
   } catch (err) {
     console.error(err);
