@@ -164,7 +164,13 @@ export async function corteDelDia(fecha: Date) {
       orderBy: { fecha: 'asc' },
     }),
     prisma.venta.aggregate({
-      where: { estadoPago: { in: ['pendiente', 'parcial'] } },
+      // OJO: no filtrar por estadoPago (antes: { in: ['pendiente','parcial'] }).
+      // Una nota puede quedar "pagada" (saldoPendiente <= 0) pero con
+      // saldoPendiente NEGATIVO si el cliente pago de mas -- ese saldo a
+      // favor es real y debe restarse de la cartera, pero filtrar por
+      // estadoPago la excluia del todo, dejando la cartera del corte
+      // sobrevaluada exactamente por ese saldo a favor.
+      where: { esCredito: true, cancelada: false },
       _sum: { saldoPendiente: true },
     }),
     prisma.compra.aggregate({
@@ -480,7 +486,13 @@ export async function guardarCorteCaja(
     utilidadYGastosDelDia(hoy, fin),
     valorInventarioActual(),
     prisma.venta.aggregate({
-      where: { estadoPago: { in: ['pendiente', 'parcial'] } },
+      // OJO: no filtrar por estadoPago (antes: { in: ['pendiente','parcial'] }).
+      // Una nota puede quedar "pagada" (saldoPendiente <= 0) pero con
+      // saldoPendiente NEGATIVO si el cliente pago de mas -- ese saldo a
+      // favor es real y debe restarse de la cartera, pero filtrar por
+      // estadoPago la excluia del todo, dejando la cartera del corte
+      // sobrevaluada exactamente por ese saldo a favor.
+      where: { esCredito: true, cancelada: false },
       _sum: { saldoPendiente: true },
     }),
     prisma.compra.aggregate({
