@@ -148,13 +148,19 @@ export async function corteDelDia(fecha: Date) {
     // Y los pagos de una venta/compra que se cancelo COMPLETA -- si no, el
     // corte los sigue contando como dinero cobrado aunque cancelarVenta/
     // cancelarCompra ya revirtieron ese monto de saldoEfectivo/BancoActual.
+    //
+    // Solo abonos a ventas/compras de DIAS ANTERIORES (venta/compra.fecha
+    // < inicioDia): el pago inicial de una venta/compra hecha HOY ya se
+    // cuenta en "Ventas del dia"/"Compras del dia" (via v.pagos/c.pagos)
+    // -- si tambien se contara aqui, se duplicaria ese dinero en el
+    // cuadre de efectivo.
     prisma.pagoVenta.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false, venta: { cancelada: false } },
+      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false, venta: { cancelada: false, fecha: { lt: inicioDia } } },
       include: { venta: { include: { cliente: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
     prisma.pagoCompra.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, compra: { cancelada: false } },
+      where: { fecha: { gte: inicioDia, lte: fin }, compra: { cancelada: false, fecha: { lt: inicioDia } } },
       include: { compra: { include: { proveedor: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
@@ -303,6 +309,9 @@ export async function corteDelDia(fecha: Date) {
   // mas lo que vaya tecleando.
   const balanzaAyer = corteAnterior ? Number(corteAnterior.balanzaTotal) : null;
   const balanzaEsperada = balanzaAyer !== null ? balanzaAyer + utilidadDia - gastosDia : null;
+  // Para el cuadre de efectivo (distinto de la balanza): cuanto efectivo
+  // quedo contado el corte anterior, punto de partida del dia de hoy.
+  const efectivoAyer = corteAnterior ? Number(corteAnterior.efectivoContado) : null;
 
   return {
     yaExisteCorteHoy: !!corteExistente,
@@ -460,6 +469,10 @@ export async function corteDelDia(fecha: Date) {
     valorInventario,
     balanzaAyer,
     balanzaEsperada,
+    // A diferencia de los de arriba, este SI es visible para cualquiera
+    // (no solo quien puede ver utilidad) -- es el punto de partida del
+    // cuadre de efectivo del dia, que tambien es publico.
+    efectivoAyer,
   };
 }
 
