@@ -13,6 +13,7 @@ import {
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
+import { clientesEnRiesgo } from '../services/analitica.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 import {
@@ -962,6 +963,16 @@ router.get('/inventario/antiguedad-stock', requierePermiso('puedeVerCostos'), as
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al consultar la antigüedad del stock' });
+  }
+});
+
+router.get('/analitica/clientes-en-riesgo', requierePermiso('puedeVerCarteraGeneral'), async (_req, res) => {
+  try {
+    const reporte = await clientesEnRiesgo();
+    res.json(reporte);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar la analítica de ventas' });
   }
 });
 
