@@ -104,6 +104,7 @@ model Variante {
 
   lotes      LoteInventario[]
   cotizacionItems CotizacionItem[]
+  costosProveedores CostoProveedorProducto[]
 
   @@unique([productoId, marca])
 }
@@ -117,6 +118,23 @@ model Proveedor {
   contacto  String?
   compras   Compra[]
   gastos    Gasto[]
+  costosProductos CostoProveedorProducto[]
+}
+
+// Costos de referencia que el proveedor ofrece por producto -- puramente
+// informativo (para comparar entre proveedores al momento de comprar), NO
+// se usa para calcular costo real de inventario, eso sigue viniendo del
+// costoUnitario de cada LoteInventario al momento de la compra.
+model CostoProveedorProducto {
+  id            String    @id @default(uuid())
+  proveedorId   String
+  proveedor     Proveedor @relation(fields: [proveedorId], references: [id])
+  varianteId    String
+  variante      Variante  @relation(fields: [varianteId], references: [id])
+  costo         Decimal   @db.Decimal(10, 2)
+  actualizadoEn DateTime  @updatedAt
+
+  @@unique([proveedorId, varianteId])
 }
 
 model Compra {

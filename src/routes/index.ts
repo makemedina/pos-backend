@@ -1,5 +1,6 @@
 import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante, actualizarProducto, NombreProductoInvalidoError, NombreProductoDuplicadoError } from '../services/catalogo.service';
 import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor, eliminarProveedor, ProveedorConInformacionLigadaError } from '../services/proveedores.service';
+import { listarCostosProveedor, guardarCostoProveedor, eliminarCostoProveedor } from '../services/costosProveedor.service';
 import { Router } from 'express';
 import {
   crearVenta,
@@ -639,6 +640,40 @@ router.post('/proveedores/importar', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al importar los proveedores' });
+  }
+});
+
+router.get('/proveedores/:id/costos', requierePermiso('puedeVerCostos'), async (req, res) => {
+  try {
+    const costos = await listarCostosProveedor(req.params.id);
+    res.json(costos);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar los costos del proveedor' });
+  }
+});
+
+router.put('/proveedores/:id/costos/:varianteId', requierePermiso('puedeVerCostos'), async (req, res) => {
+  try {
+    const { costo } = req.body;
+    if (typeof costo !== 'number' || costo <= 0) {
+      return res.status(400).json({ error: 'El costo debe ser un número mayor a cero.' });
+    }
+    const registro = await guardarCostoProveedor(req.params.id, req.params.varianteId, costo);
+    res.json(registro);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al guardar el costo' });
+  }
+});
+
+router.delete('/proveedores/:id/costos/:varianteId', requierePermiso('puedeVerCostos'), async (req, res) => {
+  try {
+    await eliminarCostoProveedor(req.params.id, req.params.varianteId);
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar el costo' });
   }
 });
 
