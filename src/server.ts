@@ -8,15 +8,15 @@ dotenv.config();
 
 const app = express();
 
-app.use(
-  cors({
-    origin: [
-      'https://pos-frontend-258.pages.dev',
-      'https://ventas.mrcarnes.com',
-      'http://localhost:5173',
-    ],
-  })
-);
+// ALLOWED_ORIGINS (opcional, separado por comas) permite agregar el
+// dominio de una sucursal nueva sin tener que tocar este archivo -- cada
+// sucursal corre su propio backend con su propia base de datos, y cada
+// uno se configura con sus propios origenes permitidos en Railway.
+const origenesPermitidos = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['https://pos-frontend-258.pages.dev', 'https://ventas.mrcarnes.com', 'http://localhost:5173'];
+
+app.use(cors({ origin: origenesPermitidos }));
 
 app.use(express.json({ limit: '5mb' }));
 
