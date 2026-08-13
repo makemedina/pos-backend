@@ -323,6 +323,7 @@ export async function movimientosDeCliente(clienteId: string) {
       folio: p.venta.folio,
       fecha: p.fecha,
       monto: Number(p.monto),
+      cancelado: p.cancelado,
     })),
   ].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
 
