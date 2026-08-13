@@ -122,6 +122,16 @@ async function aplicarPagoVenta(
     throw new MontoPagoInvalidoError('El monto del pago debe ser mayor a cero');
   }
 
+  // Bloquea la fila de la venta por el resto de esta transaccion. Sin
+  // esto, dos abonos casi simultaneos a la MISMA nota (ej. el usuario le
+  // dio doble click porque la pantalla se veia colgada) leen el mismo
+  // saldoPendiente inicial y el segundo pisa el descuento del primero en
+  // vez de sumarse -- el efectivo/banco de Configuracion queda bien
+  // (usa increment atomico), pero el saldoPendiente de la nota queda mal.
+  // El SELECT FOR UPDATE obliga a que la segunda transaccion espere a que
+  // la primera termine, y entonces lea el saldo YA actualizado.
+  await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${ventaId} FOR UPDATE`;
+
   const venta = await tx.venta.findUniqueOrThrow({
     where: { id: ventaId },
     include: { items: { include: { pagoAsignaciones: true } } },
@@ -312,9 +322,17 @@ export async function cancelarPagoVenta(
     const monto = Number(pagoActual.monto);
     const total = Number(pagoActual.venta.total);
 
+    // Mismo candado que aplicarPagoVenta: bloquea la fila y vuelve a leer
+    // el saldoPendiente YA DENTRO de la transaccion, en vez de confiar en
+    // el valor que se leyo antes de entrar aqui (pagoActual.venta), que
+    // pudo quedar desactualizado si hubo otro pago/cancelacion a la misma
+    // nota mientras tanto.
+    await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${pagoActual.ventaId} FOR UPDATE`;
+    const ventaActual = await tx.venta.findUniqueOrThrow({ where: { id: pagoActual.ventaId } });
+
     await tx.pagoAsignacion.deleteMany({ where: { pagoId } });
 
-    const nuevoSaldo = Math.min(Number(pagoActual.venta.saldoPendiente) + monto, total);
+    const nuevoSaldo = Math.min(Number(ventaActual.saldoPendiente) + monto, total);
 
     await tx.venta.update({
       where: { id: pagoActual.ventaId },

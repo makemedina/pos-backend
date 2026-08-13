@@ -116,6 +116,12 @@ async function aplicarPagoCompra(
     throw new MontoPagoCompraInvalidoError('El monto del pago debe ser mayor a cero');
   }
 
+  // Mismo candado que aplicarPagoVenta (cartera.service.ts): bloquea la
+  // fila para que dos pagos casi simultaneos a la MISMA factura (ej.
+  // doble click por una pantalla colgada) no lean el mismo saldo inicial
+  // y se pisen entre si.
+  await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${compraId} FOR UPDATE`;
+
   const compra = await tx.compra.findUniqueOrThrow({ where: { id: compraId } });
 
   if (proveedorIdEsperado && compra.proveedorId !== proveedorIdEsperado) {
