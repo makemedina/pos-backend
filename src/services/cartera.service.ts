@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
+import { consumirSaldoAFavor } from './saldoAFavor.service';
 
 export class MontoPagoInvalidoError extends Error {}
 
@@ -216,6 +217,10 @@ async function aplicarPagoVenta(
       update: { saldoEfectivoActual: { increment: monto } },
       create: { id: 'singleton', saldoEfectivoActual: monto },
     });
+  } else if (metodoPago === 'saldo_favor') {
+    // No es dinero nuevo: se descuenta del saldo a favor que el cliente
+    // ya tenia en otras notas (ver saldoAFavor.service.ts).
+    await consumirSaldoAFavor(tx, venta.clienteId, monto);
   }
 
   return { pago, venta, saldoNotaRestante: nuevoSaldo };

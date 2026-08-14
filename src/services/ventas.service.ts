@@ -1,5 +1,6 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
+import { consumirSaldoAFavor } from './saldoAFavor.service';
 
 interface ItemVentaInput {
   varianteId: string;
@@ -262,6 +263,8 @@ export async function crearVenta(input: CrearVentaInput) {
       }
 
       // El saldo bancario o en efectivo sube solo, segun el metodo de pago.
+      // "saldo_favor" no es dinero nuevo: se descuenta del saldo a favor
+      // que el cliente ya tenia en otras notas, no de efectivo/banco.
       if (pagoInput.metodoPago === 'transferencia') {
         await tx.configuracion.upsert({
           where: { id: 'singleton' },
@@ -274,6 +277,8 @@ export async function crearVenta(input: CrearVentaInput) {
           update: { saldoEfectivoActual: { increment: pagoInput.monto } },
           create: { id: 'singleton', saldoEfectivoActual: pagoInput.monto },
         });
+      } else if (pagoInput.metodoPago === 'saldo_favor') {
+        await consumirSaldoAFavor(tx, input.clienteId, pagoInput.monto);
       }
     }
 

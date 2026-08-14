@@ -15,6 +15,7 @@ import {
 import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
+import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 import {
@@ -694,6 +695,9 @@ router.post('/ventas', async (req, res) => {
     if (err instanceof ClienteSinCreditoError) {
       return res.status(403).json({ error: err.message, code: 'CLIENTE_SIN_CREDITO' });
     }
+    if (err instanceof SaldoAFavorInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_A_FAVOR_INSUFICIENTE' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar la venta' });
   }
@@ -1260,6 +1264,16 @@ router.get('/clientes/:id/ultimos-precios', async (req, res) => {
   }
 });
 
+router.get('/clientes/:id/saldo-a-favor', async (req, res) => {
+  try {
+    const disponible = await saldoAFavorDisponible(req.params.id);
+    res.json({ disponible });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar el saldo a favor del cliente' });
+  }
+});
+
 router.get('/historial/ventas', async (req, res) => {
   try {
     const ventas = await listarHistorialVentas(
@@ -1324,6 +1338,9 @@ router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistra
     if (err instanceof MontoPagoInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
     }
+    if (err instanceof SaldoAFavorInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_A_FAVOR_INSUFICIENTE' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago repartido entre notas' });
   }
@@ -1347,6 +1364,9 @@ router.post('/ventas/:id/pagos', requierePermiso('puedeRegistrarPagos'), async (
   } catch (err) {
     if (err instanceof MontoPagoInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
+    }
+    if (err instanceof SaldoAFavorInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_A_FAVOR_INSUFICIENTE' });
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago de la venta' });
