@@ -163,8 +163,11 @@ export async function migrarSaldoInicialANotas(registradoPorId: string, fecha?: 
 }
 
 function calcularSaldoTotal(ventas: { esCredito: boolean; saldoPendiente: any }[], saldoInicial: any = 0) {
+  // Cuenta las notas a credito, y tambien las de contado que quedaron con
+  // saldo a favor (saldoPendiente negativo) por un sobrepago -- ese
+  // excedente tambien debe reflejarse en el saldo total del cliente.
   const deVentas = ventas
-    .filter((v) => v.esCredito)
+    .filter((v) => v.esCredito || Number(v.saldoPendiente) < 0)
     .reduce((acc, v) => acc + Number(v.saldoPendiente), 0);
   return deVentas + Number(saldoInicial);
 }

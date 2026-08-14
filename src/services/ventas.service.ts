@@ -187,12 +187,16 @@ export async function crearVenta(input: CrearVentaInput) {
     const estadoPago =
       saldoPendiente <= 0 ? 'pagada' : montoPagadoAhora > 0 ? 'parcial' : 'pendiente';
 
+    // NO se recorta a 0: si el cliente pago de mas (efectivo o
+    // transferencia, credito o de contado), el excedente queda como
+    // saldoPendiente negativo -- saldo a favor del cliente, que se resta
+    // del resto de su cartera (igual que un abono de mas en cartera.service.ts).
     const venta = await tx.venta.create({
       data: {
         vendedorId: input.vendedorId,
         clienteId: input.clienteId,
         total,
-        saldoPendiente: Math.max(saldoPendiente, 0),
+        saldoPendiente,
         esCredito: input.esCredito,
         estadoPago,
         canalTicket: input.canalTicket,
@@ -220,6 +224,14 @@ export async function crearVenta(input: CrearVentaInput) {
     // efectivo y parte por transferencia) -- se crea un PagoVenta por cada
     // metodo con monto > 0, cada uno con su propio reparto proporcional
     // entre lineas (igual que un abono normal de Cartera).
+    //
+    // Si el cliente pago de mas, el excedente NO se reparte entre las
+    // lineas (ya no les falta nada) -- solo se reparte hasta cubrir lo que
+    // en verdad restaba, para que calcularUtilidadVenta() nunca calcule
+    // mas del 100% cobrado por producto. restantePorItem se va
+    // descontando conforme se procesa cada metodo de pago.
+    const restantePorItem = items.map((item) => item.subtotal);
+
     for (const pagoInput of pagosValidos) {
       const pago = await tx.pagoVenta.create({
         data: {
@@ -229,17 +241,24 @@ export async function crearVenta(input: CrearVentaInput) {
         },
       });
 
-      for (const item of items) {
-        const proporcion = item.subtotal / total;
-        const montoAsignado = pagoInput.monto * proporcion;
+      const totalRestante = restantePorItem.reduce((acc, r) => acc + r, 0);
+      const montoAAsignar = Math.min(pagoInput.monto, totalRestante);
 
-        await tx.pagoAsignacion.create({
-          data: {
-            pagoId: pago.id,
-            ventaItemId: item.id,
-            montoAsignado,
-          },
-        });
+      if (totalRestante > 0 && montoAAsignar > 0) {
+        for (let i = 0; i < items.length; i++) {
+          if (restantePorItem[i] <= 0) continue;
+          const proporcion = restantePorItem[i] / totalRestante;
+          const montoAsignado = montoAAsignar * proporcion;
+
+          await tx.pagoAsignacion.create({
+            data: {
+              pagoId: pago.id,
+              ventaItemId: items[i].id,
+              montoAsignado,
+            },
+          });
+          restantePorItem[i] -= montoAsignado;
+        }
       }
 
       // El saldo bancario o en efectivo sube solo, segun el metodo de pago.
@@ -259,10 +278,15 @@ export async function crearVenta(input: CrearVentaInput) {
     }
 
     // El recibo necesita mostrar el saldo total actualizado del cliente
-    // (sumando todas sus notas a credito, incluida esta si aplica).
+    // (sumando todas sus notas a credito, incluida esta si aplica -- y
+    // tambien cualquier saldo a favor por sobrepago en ventas de contado).
     const [ventasCliente, cliente] = await Promise.all([
       tx.venta.aggregate({
-        where: { clienteId: input.clienteId, esCredito: true, cancelada: false },
+        where: {
+          clienteId: input.clienteId,
+          cancelada: false,
+          OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }],
+        },
         _sum: { saldoPendiente: true },
       }),
       tx.cliente.findUniqueOrThrow({ where: { id: input.clienteId } }),

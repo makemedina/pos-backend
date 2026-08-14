@@ -24,19 +24,28 @@ function esMismoDia(fecha: Date, referencia: Date) {
   );
 }
 
+// Una nota cuenta para Cartera si es a credito, O si es de contado pero
+// el cliente pago de mas y quedo con saldo a favor (saldoPendiente
+// negativo) -- ese excedente tambien debe verse y restarse del resto de
+// su cartera, aunque la venta en si nunca fue "a credito".
+const NOTA_RELEVANTE_PARA_CARTERA = { OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }] };
+
 /**
  * Nivel 1 de Cartera: un renglon por cada cliente que alguna vez tuvo una
- * venta a credito, con su saldo total (suma de saldoPendiente de todas
- * sus notas a credito). El total general de cartera se calcula en el
+ * venta a credito (o quedo con saldo a favor de una venta de contado),
+ * con su saldo total. El total general de cartera se calcula en el
  * frontend sumando estos saldoTotal.
  */
 export async function resumenCarteraClientes() {
   const clientes = await prisma.cliente.findMany({
     where: {
-      OR: [{ ventas: { some: { esCredito: true, cancelada: false } } }, { saldoInicial: { gt: 0 } }],
+      OR: [
+        { ventas: { some: { cancelada: false, ...NOTA_RELEVANTE_PARA_CARTERA } } },
+        { saldoInicial: { gt: 0 } },
+      ],
     },
     include: {
-      ventas: { where: { esCredito: true, cancelada: false }, select: { saldoPendiente: true } },
+      ventas: { where: { cancelada: false, ...NOTA_RELEVANTE_PARA_CARTERA }, select: { saldoPendiente: true } },
     },
     orderBy: { nombre: 'asc' },
   });
@@ -62,9 +71,12 @@ export async function notasClienteCredito(clienteId: string, incluirPagadas: boo
   const notas = await prisma.venta.findMany({
     where: {
       clienteId,
-      esCredito: true,
       cancelada: false,
-      ...(incluirPagadas ? {} : { saldoPendiente: { gt: 0 } }),
+      ...NOTA_RELEVANTE_PARA_CARTERA,
+      // "not: 0" en vez de "gt: 0" porque un saldo negativo (a favor del
+      // cliente por una venta de contado pagada de mas) tambien cuenta
+      // como "con saldo pendiente de mostrar", no solo lo que debe.
+      ...(incluirPagadas ? {} : { saldoPendiente: { not: 0 } }),
     },
     orderBy: { fecha: 'desc' },
   });
@@ -212,7 +224,7 @@ async function aplicarPagoVenta(
 async function calcularSaldoTotalCliente(tx: Prisma.TransactionClient, clienteId: string) {
   const [ventasCliente, cliente] = await Promise.all([
     tx.venta.aggregate({
-      where: { clienteId, esCredito: true, cancelada: false },
+      where: { clienteId, cancelada: false, ...NOTA_RELEVANTE_PARA_CARTERA },
       _sum: { saldoPendiente: true },
     }),
     tx.cliente.findUniqueOrThrow({ where: { id: clienteId } }),

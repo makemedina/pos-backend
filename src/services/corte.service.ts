@@ -176,7 +176,12 @@ export async function corteDelDia(fecha: Date) {
       // favor es real y debe restarse de la cartera, pero filtrar por
       // estadoPago la excluia del todo, dejando la cartera del corte
       // sobrevaluada exactamente por ese saldo a favor.
-      where: { esCredito: true, cancelada: false },
+      //
+      // Tampoco se filtra solo por esCredito: una venta de CONTADO tambien
+      // puede quedar con saldo a favor si el cliente pago de mas (ver
+      // cartera.service.ts, NOTA_RELEVANTE_PARA_CARTERA) -- ese saldo debe
+      // contar aqui igual.
+      where: { cancelada: false, OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }] },
       _sum: { saldoPendiente: true },
     }),
     prisma.compra.aggregate({
@@ -507,7 +512,12 @@ export async function guardarCorteCaja(
       // favor es real y debe restarse de la cartera, pero filtrar por
       // estadoPago la excluia del todo, dejando la cartera del corte
       // sobrevaluada exactamente por ese saldo a favor.
-      where: { esCredito: true, cancelada: false },
+      //
+      // Tampoco se filtra solo por esCredito: una venta de CONTADO tambien
+      // puede quedar con saldo a favor si el cliente pago de mas (ver
+      // cartera.service.ts, NOTA_RELEVANTE_PARA_CARTERA) -- ese saldo debe
+      // contar aqui igual.
+      where: { cancelada: false, OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }] },
       _sum: { saldoPendiente: true },
     }),
     prisma.compra.aggregate({
