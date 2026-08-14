@@ -602,3 +602,83 @@ export async function cargarFacturasIniciales(filas: FacturaInicial[], fecha?: D
 
   return { creadas: resultado.length };
 }
+
+export class CompraNoEsDeHoyError extends Error {
+  constructor() {
+    super('Solo se puede corregir el método de pago de una compra registrada hoy.');
+  }
+}
+
+export class CorteYaHechoError extends Error {
+  constructor() {
+    super('Ya se guardó el corte de caja de hoy. Para corregir esto, habla con un administrador.');
+  }
+}
+
+/**
+ * Corrige una compra que se capturo "de contado" por error (el usuario
+ * puso efectivo/transferencia cuando en realidad era a credito): borra
+ * el/los pagos que tenga, regresa el efectivo/banco que se le habian
+ * descontado, y deja la compra con saldoPendiente = total (pendiente),
+ * como si nunca se hubiera pagado nada.
+ *
+ * A diferencia de cancelarCompra/cancelarPagoVenta (que dejan registro
+ * porque pueden pasar dias despues), aqui se borra de verdad -- por eso
+ * solo se permite el MISMO dia que se registro la compra, y solo si
+ * todavia no se guardo el corte de caja de hoy. Una vez guardado el
+ * corte, el efectivo/banco de ese dia ya quedo "congelado" en ese
+ * reporte, y revertir un pago despues romperia ese cuadre sin que nadie
+ * se diera cuenta.
+ */
+export async function corregirCompraAContadoCredito(compraId: string) {
+  const compra = await prisma.compra.findUniqueOrThrow({
+    where: { id: compraId },
+    include: { pagos: true },
+  });
+
+  if (compra.cancelada) {
+    throw new CompraYaCanceladaError();
+  }
+
+  const hoy = new Date();
+  if (!esMismoDia(compra.fecha, hoy)) {
+    throw new CompraNoEsDeHoyError();
+  }
+
+  const inicioDia = new Date(hoy);
+  inicioDia.setHours(0, 0, 0, 0);
+  const corteHoy = await prisma.corteCaja.findUnique({ where: { fecha: inicioDia } });
+  if (corteHoy) {
+    throw new CorteYaHechoError();
+  }
+
+  if (compra.pagos.length === 0) {
+    return compra;
+  }
+
+  return prisma.$transaction(async (tx) => {
+    for (const pago of compra.pagos) {
+      const monto = Number(pago.monto);
+      if (pago.metodoPago === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { increment: monto } },
+          create: { id: 'singleton', saldoBancoActual: monto },
+        });
+      } else if (pago.metodoPago === 'efectivo') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoEfectivoActual: { increment: monto } },
+          create: { id: 'singleton', saldoEfectivoActual: monto },
+        });
+      }
+    }
+
+    await tx.pagoCompra.deleteMany({ where: { compraId } });
+
+    return tx.compra.update({
+      where: { id: compraId },
+      data: { saldoPendiente: compra.total, estadoPago: 'pendiente' },
+    });
+  });
+}

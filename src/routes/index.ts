@@ -12,7 +12,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
@@ -934,6 +934,25 @@ router.post('/compras/:id/cancelar', async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: 'Error al cancelar la compra' });
+  }
+});
+
+router.post('/compras/:id/corregir-a-credito', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+  try {
+    const compra = await corregirCompraAContadoCredito(req.params.id);
+    res.json(compra);
+  } catch (err) {
+    if (err instanceof CompraYaCanceladaError) {
+      return res.status(409).json({ error: err.message, code: 'COMPRA_YA_CANCELADA' });
+    }
+    if (err instanceof CompraNoEsDeHoyError) {
+      return res.status(409).json({ error: err.message, code: 'COMPRA_NO_ES_DE_HOY' });
+    }
+    if (err instanceof CorteYaHechoError) {
+      return res.status(409).json({ error: err.message, code: 'CORTE_YA_HECHO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al corregir la compra' });
   }
 });
 
