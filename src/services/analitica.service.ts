@@ -18,6 +18,25 @@ const COMPRAS_MINIMAS_PARA_ANALIZAR = 3;
 
 const UN_DIA_MS = 1000 * 60 * 60 * 24;
 
+// El negocio no abre los domingos -- para el ritmo de compra ("cada
+// cuantos dias compra" / "cuantos dias lleva sin comprar"), contar el
+// domingo como un dia habil mas haria que un cliente que compra cada
+// semana (ej. lunes a lunes) se vea con un intervalo de 7 dias en vez de
+// los 6 dias habiles reales, distorsionando la comparacion.
+function diasHabilesEntre(inicio: Date, fin: Date): number {
+  const cursor = new Date(inicio);
+  cursor.setHours(0, 0, 0, 0);
+  const finNormalizado = new Date(fin);
+  finNormalizado.setHours(0, 0, 0, 0);
+
+  let dias = 0;
+  while (cursor < finNormalizado) {
+    cursor.setDate(cursor.getDate() + 1);
+    if (cursor.getDay() !== 0) dias++; // getDay() === 0 -> domingo
+  }
+  return dias;
+}
+
 export type MotivoRiesgo = 'dejo_de_comprar' | 'compra_menos' | 'ambos';
 
 export interface ClienteEnRiesgo {
@@ -64,13 +83,14 @@ export async function clientesEnRiesgo(): Promise<ClienteEnRiesgo[]> {
     const fechas = c.ventas.map((v) => v.fecha);
     const primeraCompra = fechas[0];
     const ultimaCompra = fechas[fechas.length - 1];
-    const diasSinComprar = Math.floor((hoy.getTime() - ultimaCompra.getTime()) / UN_DIA_MS);
+    const diasSinComprar = diasHabilesEntre(ultimaCompra, hoy);
 
     // Senal 1: ritmo de compra. Cuanto tardaba normalmente entre una
-    // compra y la siguiente, contra cuanto lleva tardando ahora.
+    // compra y la siguiente (en dias habiles, sin contar domingos),
+    // contra cuanto lleva tardando ahora.
     let sumaIntervalos = 0;
     for (let i = 1; i < fechas.length; i++) {
-      sumaIntervalos += (fechas[i].getTime() - fechas[i - 1].getTime()) / UN_DIA_MS;
+      sumaIntervalos += diasHabilesEntre(fechas[i - 1], fechas[i]);
     }
     const intervaloPromedioDias = sumaIntervalos / (fechas.length - 1);
     const ritmoPct = Math.min(
