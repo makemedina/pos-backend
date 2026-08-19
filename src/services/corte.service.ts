@@ -103,8 +103,18 @@ async function valorInventarioActual() {
  * pasivos: cartera por cobrar + valor de inventario, menos cuentas por
  * pagar). Utilidad y balanza revelan el desempeño del negocio, asi que
  * la ruta las quita de la respuesta si el usuario no tiene permiso.
+ *
+ * El DETALLE de gastos (quien gasto que, en que concepto) tambien es
+ * informacion que un usuario sin permiso no deberia ver de sus
+ * compañeros -- misma regla que ya aplica en la pantalla de Gastos
+ * (listarGastos). El TOTAL de gastos si se queda visible para todos,
+ * porque hace falta para cuadrar el efectivo esperado en caja.
  */
-export async function corteDelDia(fecha: Date) {
+export async function corteDelDia(
+  fecha: Date,
+  usuario: { id: string; rolBase: string; permisos: { puedeVerGastosTodos: boolean } | null }
+) {
+  const puedeVerGastosDeTodos = usuario.rolBase === 'administrador' || !!usuario.permisos?.puedeVerGastosTodos;
   const inicioDia = normalizarFecha(fecha);
   const fin = finDelDia(inicioDia);
 
@@ -252,8 +262,15 @@ export async function corteDelDia(fecha: Date) {
     (x) => x.metodoPago,
     (x) => x.compra.proveedor.nombre
   );
+  // El TOTAL/subtotales (mas abajo) siguen usando gastosHoy completo --
+  // hace falta para cuadrar el efectivo esperado. El DETALLE que se
+  // muestra linea por linea (quien gasto que) si se recorta a los
+  // propios si el usuario no tiene permiso de ver los de todos.
+  const gastosParaDetalle = puedeVerGastosDeTodos
+    ? gastosHoy
+    : gastosHoy.filter((g) => g.registradoPorId === usuario.id);
   const gastosOrdenados = ordenarPorMetodoYNombre(
-    gastosHoy,
+    gastosParaDetalle,
     (g) => g.metodoPago,
     (g) => g.concepto
   );
@@ -377,7 +394,7 @@ export async function corteDelDia(fecha: Date) {
     },
     gastos: {
       total: totalGastos,
-      cantidad: gastosHoy.length,
+      cantidad: gastosOrdenados.length,
       subtotalesPorMetodo: gastosSubtotalesPorMetodo,
       detalle: gastosOrdenados.map((g) => ({
         id: g.id,
@@ -454,7 +471,10 @@ export async function corteDelDia(fecha: Date) {
         canceladaEn: c.canceladaEn,
         canceladaPor: c.canceladaPor?.nombre ?? '—',
       })),
-      gastos: gastosCanceladosHoy.map((g) => ({
+      gastos: (puedeVerGastosDeTodos
+        ? gastosCanceladosHoy
+        : gastosCanceladosHoy.filter((g) => g.registradoPorId === usuario.id)
+      ).map((g) => ({
         id: g.id,
         concepto: g.concepto,
         categoria: g.categoria.nombre,

@@ -1046,7 +1046,7 @@ function ocultarUtilidadSiNoTienePermiso<T extends Record<string, any>>(req: any
 router.get('/corte', async (req, res) => {
   try {
     const fecha = req.query.fecha ? fechaLocalDesdeString(req.query.fecha as string) : new Date();
-    const corte = await corteDelDia(fecha);
+    const corte = await corteDelDia(fecha, req.usuario!);
     res.json(ocultarUtilidadSiNoTienePermiso(req, corte));
   } catch (err) {
     console.error(err);
