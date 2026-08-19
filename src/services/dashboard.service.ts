@@ -121,6 +121,10 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
                 },
               },
             },
+            // Necesario para "utilidad cobrada": cuanto de este producto
+            // ya se pago de verdad, no solo lo que dice la nota completa
+            // (una venta a credito puede tener parte pagada y parte no).
+            pagoAsignaciones: true,
           },
         },
         pagos: { orderBy: { fecha: 'asc' } },
@@ -145,14 +149,32 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     0
   );
 
-  const utilidadBruta = ventas.reduce((acc, venta) => {
-    const ventaUtilidad = venta.items.reduce((itemAcc, item) => {
-      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
-      const costo = Number(item.cantidad) * Number(item.costoUnitarioSnapshot);
-      return itemAcc + (subtotal - costo);
-    }, 0);
-    return acc + ventaUtilidad;
-  }, 0);
+  // kg vendidos y las dos utilidades se calculan juntas, item por item:
+  // - utilidadBruta ("en papel"): el margen completo de cada producto,
+  //   se haya cobrado o no todavia (venta a credito sin abonar cuenta
+  //   igual que una de contado).
+  // - utilidadCobrada: ese mismo margen, pero prorrateado por cuanto de
+  //   ESE producto en especifico ya se pago de verdad (via
+  //   PagoAsignacion) -- misma logica que calcularUtilidadVenta() usa
+  //   para una sola nota, aqui sumada sobre todo el periodo.
+  let kgVendidos = 0;
+  let utilidadBruta = 0;
+  let utilidadCobrada = 0;
+  for (const venta of ventas) {
+    for (const item of venta.items) {
+      const cantidad = Number(item.cantidad);
+      const subtotal = cantidad * Number(item.precioUnitario);
+      const costo = cantidad * Number(item.costoUnitarioSnapshot);
+      const margenItem = subtotal - costo;
+
+      kgVendidos += cantidad;
+      utilidadBruta += margenItem;
+
+      const totalAsignado = item.pagoAsignaciones.reduce((acc, a) => acc + Number(a.montoAsignado), 0);
+      const porcentajeCobrado = subtotal > 0 ? totalAsignado / subtotal : 0;
+      utilidadCobrada += margenItem * porcentajeCobrado;
+    }
+  }
 
   const totalGastos = gastos.reduce((acc, gasto) => acc + Number(gasto.monto), 0);
 
@@ -204,6 +226,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     facturacion: number;
     ventasCantidad: number;
     ganancia: number;
+    utilidadCobrada: number;
+    kgVendidos: number;
     totalCobrado: number;
     gastos: number;
     ventasEfectivo: number;
@@ -217,6 +241,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
         facturacion: 0,
         ventasCantidad: 0,
         ganancia: 0,
+        utilidadCobrada: 0,
+        kgVendidos: 0,
         totalCobrado: 0,
         gastos: 0,
         ventasEfectivo: 0,
@@ -232,11 +258,17 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     dia.facturacion += Number(venta.total);
     dia.ventasCantidad += 1;
     dia.totalCobrado += Number(venta.total) - Number(venta.saldoPendiente);
-    dia.ganancia += venta.items.reduce((acc, item) => {
-      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
-      const costo = Number(item.cantidad) * Number(item.costoUnitarioSnapshot);
-      return acc + (subtotal - costo);
-    }, 0);
+    for (const item of venta.items) {
+      const cantidad = Number(item.cantidad);
+      const subtotal = cantidad * Number(item.precioUnitario);
+      const costo = cantidad * Number(item.costoUnitarioSnapshot);
+      const margenItem = subtotal - costo;
+      dia.kgVendidos += cantidad;
+      dia.ganancia += margenItem;
+      const totalAsignado = item.pagoAsignaciones.reduce((acc, a) => acc + Number(a.montoAsignado), 0);
+      const porcentajeCobrado = subtotal > 0 ? totalAsignado / subtotal : 0;
+      dia.utilidadCobrada += margenItem * porcentajeCobrado;
+    }
     dia.ventasEfectivo += sumaPagosPorMetodo(venta.pagos, 'efectivo');
     dia.ventasTransferencia += sumaPagosPorMetodo(venta.pagos, 'transferencia');
   }
@@ -253,6 +285,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
         ventasCantidad: d.ventasCantidad,
         ticketMedio: d.ventasCantidad > 0 ? d.facturacion / d.ventasCantidad : 0,
         ganancia: d.ganancia,
+        utilidadCobrada: d.utilidadCobrada,
+        kgVendidos: d.kgVendidos,
         totalCobrado: d.totalCobrado,
         utilidadNeta: d.ganancia - d.gastos,
         porcentajeEfectivo: baseMetodoDia > 0 ? (d.ventasEfectivo / baseMetodoDia) * 100 : 0,
@@ -264,6 +298,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     totalVentas,
     totalCobrado,
     utilidadBruta,
+    utilidadCobrada,
+    kgVendidos,
     totalGastos,
     utilidadNeta: utilidadBruta - totalGastos,
     ventasCantidad,
