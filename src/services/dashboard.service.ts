@@ -289,6 +289,7 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
         kgVendidos: d.kgVendidos,
         totalCobrado: d.totalCobrado,
         utilidadNeta: d.ganancia - d.gastos,
+        utilidadNetaCobrada: d.utilidadCobrada - d.gastos,
         porcentajeEfectivo: baseMetodoDia > 0 ? (d.ventasEfectivo / baseMetodoDia) * 100 : 0,
       };
     })
@@ -302,6 +303,11 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     kgVendidos,
     totalGastos,
     utilidadNeta: utilidadBruta - totalGastos,
+    // Igual que utilidadNeta, pero restando los gastos de la utilidad
+    // COBRADA en vez de la "en papel" -- cuanto dinero real le queda al
+    // negocio despues de gastos, sin contar lo que todavia esta pendiente
+    // de cobro en ventas a credito.
+    utilidadNetaCobrada: utilidadCobrada - totalGastos,
     ventasCantidad,
     ticketMedio,
     porcentajeEfectivo,
