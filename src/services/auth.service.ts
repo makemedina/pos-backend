@@ -4,7 +4,10 @@ import { prisma } from '../prisma';
 import { verificarBloqueo, registrarIntentoFallido, limpiarIntentos } from './loginLimiter';
 
 const RONDAS_BCRYPT = 10;
-const DURACION_SESION_HORAS = 1;
+// Ventana deslizante (se renueva en cada peticion mientras se use la app):
+// un dia laboral completo, para que no pida iniciar sesion de nuevo si
+// la PWA se queda en segundo plano durante una comida o un rato sin usarse.
+const DURACION_SESION_HORAS = 12;
 
 export interface UsuarioSesion {
   id: string;
