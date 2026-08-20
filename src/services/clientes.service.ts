@@ -360,8 +360,10 @@ export async function actualizarDiasLlamadaCliente(clienteId: string, dias: numb
 
 /**
  * El checklist de "a quien llamarle hoy": todos los clientes/prospectos
- * cuyo dia de llamada incluye el dia de hoy, marcando cuales ya se
- * llamaron (LlamadaCliente tiene un registro de hoy para ese cliente).
+ * cuyo dia de llamada incluye el dia de hoy, con el estado de su
+ * registro de HOY (si ya se le hablo, la nota de la llamada, y si hizo
+ * pedido). Un cliente sin registro de hoy todavia se ve con los valores
+ * en blanco/false.
  */
 export async function listarLlamadasDeHoy() {
   const hoy = normalizarFecha(new Date());
@@ -372,35 +374,52 @@ export async function listarLlamadasDeHoy() {
     orderBy: { nombre: 'asc' },
   });
 
-  const hechas = await prisma.llamadaCliente.findMany({
+  const registros = await prisma.llamadaCliente.findMany({
     where: { fecha: hoy, clienteId: { in: clientes.map((c) => c.id) } },
   });
-  const idsHechos = new Set(hechas.map((h) => h.clienteId));
+  const porCliente = new Map(registros.map((r) => [r.clienteId, r]));
 
-  return clientes.map((c) => ({
-    id: c.id,
-    nombre: c.nombre,
-    telefono: c.telefono,
-    notas: c.notas,
-    hecha: idsHechos.has(c.id),
-  }));
+  return clientes.map((c) => {
+    const registro = porCliente.get(c.id);
+    return {
+      id: c.id,
+      nombre: c.nombre,
+      telefono: c.telefono,
+      notasCliente: c.notas,
+      hecha: registro?.hecha ?? false,
+      notas: registro?.notas ?? '',
+      hizoPedido: registro?.hizoPedido ?? false,
+    };
+  });
 }
 
 /**
- * Marca (o desmarca) a un cliente como "ya le hable" el dia de hoy.
- * Desmarcar simplemente borra el registro de hoy -- no deja rastro de
- * que se desmarco, solo importa el estado actual del dia.
+ * Actualiza el registro de HOY de un cliente en la agenda de llamadas
+ * (hecha/notas/hizoPedido, cualquier combinacion) -- crea el registro
+ * si todavia no existia. Cada campo es opcional para poder guardar solo
+ * lo que cambio (ej. tipear una nota sin tocar el checkbox de "hecha").
  */
-export async function marcarLlamadaCliente(clienteId: string, hecha: boolean, registradoPorId: string) {
+export async function actualizarLlamadaCliente(
+  clienteId: string,
+  datos: { hecha?: boolean; notas?: string; hizoPedido?: boolean },
+  registradoPorId: string
+) {
   const hoy = normalizarFecha(new Date());
 
-  if (hecha) {
-    await prisma.llamadaCliente.upsert({
-      where: { clienteId_fecha: { clienteId, fecha: hoy } },
-      update: {},
-      create: { clienteId, fecha: hoy, registradoPorId },
-    });
-  } else {
-    await prisma.llamadaCliente.deleteMany({ where: { clienteId, fecha: hoy } });
-  }
+  await prisma.llamadaCliente.upsert({
+    where: { clienteId_fecha: { clienteId, fecha: hoy } },
+    update: {
+      ...(datos.hecha !== undefined ? { hecha: datos.hecha } : {}),
+      ...(datos.notas !== undefined ? { notas: datos.notas } : {}),
+      ...(datos.hizoPedido !== undefined ? { hizoPedido: datos.hizoPedido } : {}),
+    },
+    create: {
+      clienteId,
+      fecha: hoy,
+      registradoPorId,
+      hecha: datos.hecha ?? false,
+      notas: datos.notas ?? null,
+      hizoPedido: datos.hizoPedido ?? false,
+    },
+  });
 }

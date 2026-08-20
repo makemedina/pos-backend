@@ -220,19 +220,23 @@ model Cliente {
   llamadas LlamadaCliente[]
 }
 
-// Registro de que a este cliente YA se le llamo en una fecha especifica
-// -- lo que alimenta el checklist diario ("Llamadas de hoy"). Un renglon
-// por cliente por dia en que se marco como hecha (no se borra al
-// desmarcar en el mismo dia? si -- desmarcar simplemente borra el
-// renglon de hoy, para poder corregir un click accidental).
+// Registro del dia de llamada de un cliente -- lo que alimenta el
+// checklist diario ("Llamadas de hoy"). Un renglon por cliente por dia,
+// creado en cuanto se marca hecha/se escribe una nota/se marca pedido
+// (lo que pase primero) -- "hecha" es un campo, no la sola existencia
+// del renglon, para no perder la nota si se desmarca por accidente.
 model LlamadaCliente {
   id              String   @id @default(uuid())
   clienteId       String
   cliente         Cliente  @relation(fields: [clienteId], references: [id])
-  fecha           DateTime // dia en que se marco como llamado, normalizado a medianoche
+  fecha           DateTime // dia que representa este registro, normalizado a medianoche
+  hecha           Boolean  @default(false)
+  notas           String?
+  hizoPedido      Boolean  @default(false)
   registradoPorId String
   registradoPor   Usuario  @relation(fields: [registradoPorId], references: [id])
   creadoEn        DateTime @default(now())
+  actualizadoEn   DateTime @updatedAt
 
   @@unique([clienteId, fecha])
 }

@@ -35,7 +35,7 @@ import {
   ultimosPreciosCliente,
   actualizarDiasLlamadaCliente,
   listarLlamadasDeHoy,
-  marcarLlamadaCliente,
+  actualizarLlamadaCliente,
 } from '../services/clientes.service';
 import {
   actualizarPermisosUsuario,
@@ -1259,8 +1259,12 @@ router.get('/clientes/llamadas/hoy', async (_req, res) => {
 
 router.post('/clientes/:id/llamadas/hoy', async (req, res) => {
   try {
-    const { hecha } = req.body;
-    await marcarLlamadaCliente(req.params.id, !!hecha, req.usuario!.id);
+    const { hecha, notas, hizoPedido } = req.body;
+    const datos: { hecha?: boolean; notas?: string; hizoPedido?: boolean } = {};
+    if (hecha !== undefined) datos.hecha = !!hecha;
+    if (notas !== undefined) datos.notas = String(notas);
+    if (hizoPedido !== undefined) datos.hizoPedido = !!hizoPedido;
+    await actualizarLlamadaCliente(req.params.id, datos, req.usuario!.id);
     res.status(204).send();
   } catch (err) {
     console.error(err);
