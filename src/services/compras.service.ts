@@ -334,6 +334,16 @@ function obtenerRangoCompras(periodo: string, desde?: string, hasta?: string) {
       inicio.setHours(0, 0, 0, 0);
       fin.setHours(23, 59, 59, 999);
       break;
+    case 'ayer': {
+      const ayer = new Date(hoy);
+      ayer.setDate(hoy.getDate() - 1);
+      ayer.setHours(0, 0, 0, 0);
+      const finAyer = new Date(ayer);
+      finAyer.setHours(23, 59, 59, 999);
+      inicio.setTime(ayer.getTime());
+      fin.setTime(finAyer.getTime());
+      break;
+    }
     case 'semana': {
       // Semana calendario de lunes a domingo (no los ultimos 7 dias).
       const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado
@@ -346,6 +356,21 @@ function obtenerRangoCompras(periodo: string, desde?: string, hasta?: string) {
       domingo.setHours(23, 59, 59, 999);
       inicio.setTime(lunes.getTime());
       fin.setTime(domingo.getTime());
+      break;
+    }
+    case 'semana_pasada': {
+      const diaSemana = hoy.getDay();
+      const diffLunes = diaSemana === 0 ? 6 : diaSemana - 1;
+      const lunesEstaSemana = new Date(hoy);
+      lunesEstaSemana.setDate(hoy.getDate() - diffLunes);
+      const lunesPasado = new Date(lunesEstaSemana);
+      lunesPasado.setDate(lunesEstaSemana.getDate() - 7);
+      lunesPasado.setHours(0, 0, 0, 0);
+      const domingoPasado = new Date(lunesPasado);
+      domingoPasado.setDate(lunesPasado.getDate() + 6);
+      domingoPasado.setHours(23, 59, 59, 999);
+      inicio.setTime(lunesPasado.getTime());
+      fin.setTime(domingoPasado.getTime());
       break;
     }
     case 'anio':
