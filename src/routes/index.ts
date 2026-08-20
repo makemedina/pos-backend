@@ -33,6 +33,9 @@ import {
   ventasDeCliente,
   movimientosDeCliente,
   ultimosPreciosCliente,
+  actualizarDiasLlamadaCliente,
+  listarLlamadasDeHoy,
+  marcarLlamadaCliente,
 } from '../services/clientes.service';
 import {
   actualizarPermisosUsuario,
@@ -1227,6 +1230,41 @@ router.put('/clientes/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar el cliente' });
+  }
+});
+
+router.put('/clientes/:id/dias-llamada', async (req, res) => {
+  try {
+    const { dias } = req.body;
+    if (!Array.isArray(dias)) {
+      return res.status(400).json({ error: 'dias debe ser una lista de numeros' });
+    }
+    const diasLlamada = await actualizarDiasLlamadaCliente(req.params.id, dias);
+    res.json({ diasLlamada });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al guardar los dias de llamada' });
+  }
+});
+
+router.get('/clientes/llamadas/hoy', async (_req, res) => {
+  try {
+    const llamadas = await listarLlamadasDeHoy();
+    res.json(llamadas);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar las llamadas de hoy' });
+  }
+});
+
+router.post('/clientes/:id/llamadas/hoy', async (req, res) => {
+  try {
+    const { hecha } = req.body;
+    await marcarLlamadaCliente(req.params.id, !!hecha, req.usuario!.id);
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al registrar la llamada' });
   }
 });
 

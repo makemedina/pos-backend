@@ -212,6 +212,7 @@ export async function obtenerClienteDetalle(clienteId: string) {
     permiteVentaCredito: cliente.permiteVentaCredito,
     saldoInicial: Number(cliente.saldoInicial),
     saldoTotal: calcularSaldoTotal(cliente.ventas, cliente.saldoInicial),
+    diasLlamada: cliente.diasLlamada,
   };
 }
 
@@ -335,4 +336,71 @@ export async function movimientosDeCliente(clienteId: string) {
   );
 
   return { saldoTotal, movimientos };
+}
+
+// ---------- AGENDA DE LLAMADAS ----------
+
+function normalizarFecha(fecha: Date) {
+  const f = new Date(fecha);
+  f.setHours(0, 0, 0, 0);
+  return f;
+}
+
+/** Configura que dias de la semana (0=domingo...6=sabado) hay que llamarle a este cliente/prospecto. */
+export async function actualizarDiasLlamadaCliente(clienteId: string, dias: number[]) {
+  const diasValidos = [...new Set(dias.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort(
+    (a, b) => a - b
+  );
+  const cliente = await prisma.cliente.update({
+    where: { id: clienteId },
+    data: { diasLlamada: diasValidos },
+  });
+  return cliente.diasLlamada;
+}
+
+/**
+ * El checklist de "a quien llamarle hoy": todos los clientes/prospectos
+ * cuyo dia de llamada incluye el dia de hoy, marcando cuales ya se
+ * llamaron (LlamadaCliente tiene un registro de hoy para ese cliente).
+ */
+export async function listarLlamadasDeHoy() {
+  const hoy = normalizarFecha(new Date());
+  const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado, igual que diasLlamada
+
+  const clientes = await prisma.cliente.findMany({
+    where: { diasLlamada: { has: diaSemana } },
+    orderBy: { nombre: 'asc' },
+  });
+
+  const hechas = await prisma.llamadaCliente.findMany({
+    where: { fecha: hoy, clienteId: { in: clientes.map((c) => c.id) } },
+  });
+  const idsHechos = new Set(hechas.map((h) => h.clienteId));
+
+  return clientes.map((c) => ({
+    id: c.id,
+    nombre: c.nombre,
+    telefono: c.telefono,
+    notas: c.notas,
+    hecha: idsHechos.has(c.id),
+  }));
+}
+
+/**
+ * Marca (o desmarca) a un cliente como "ya le hable" el dia de hoy.
+ * Desmarcar simplemente borra el registro de hoy -- no deja rastro de
+ * que se desmarco, solo importa el estado actual del dia.
+ */
+export async function marcarLlamadaCliente(clienteId: string, hecha: boolean, registradoPorId: string) {
+  const hoy = normalizarFecha(new Date());
+
+  if (hecha) {
+    await prisma.llamadaCliente.upsert({
+      where: { clienteId_fecha: { clienteId, fecha: hoy } },
+      update: {},
+      create: { clienteId, fecha: hoy, registradoPorId },
+    });
+  } else {
+    await prisma.llamadaCliente.deleteMany({ where: { clienteId, fecha: hoy } });
+  }
 }

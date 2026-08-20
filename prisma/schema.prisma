@@ -44,6 +44,7 @@ model Usuario {
   cotizacionesRegistradas Cotizacion[] @relation("VendedorCotizacion")
   pagosVentaCancelados PagoVenta[] @relation("CancelaPagoVenta")
   pagosVentaAutorizadosCancelacion PagoVenta[] @relation("AutorizaCancelacionPagoVenta")
+  llamadasClienteRegistradas LlamadaCliente[]
   sesiones           Sesion[]
 }
 
@@ -209,9 +210,31 @@ model Cliente {
   // no es una venta real -- no afecta inventario ni reportes de ventas.
   saldoInicial        Decimal  @db.Decimal(12, 2) @default(0)
   fechaAlta           DateTime @default(now())
+  // Que dias de la semana hay que hablarle a este cliente/prospecto para
+  // ofrecerle producto -- 0=domingo ... 6=sabado (igual que Date.getDay()
+  // en el resto del sistema). Vacio = no esta en ningun plan de llamadas.
+  diasLlamada         Int[]    @default([])
 
   ventas Venta[]
   cotizaciones Cotizacion[]
+  llamadas LlamadaCliente[]
+}
+
+// Registro de que a este cliente YA se le llamo en una fecha especifica
+// -- lo que alimenta el checklist diario ("Llamadas de hoy"). Un renglon
+// por cliente por dia en que se marco como hecha (no se borra al
+// desmarcar en el mismo dia? si -- desmarcar simplemente borra el
+// renglon de hoy, para poder corregir un click accidental).
+model LlamadaCliente {
+  id              String   @id @default(uuid())
+  clienteId       String
+  cliente         Cliente  @relation(fields: [clienteId], references: [id])
+  fecha           DateTime // dia en que se marco como llamado, normalizado a medianoche
+  registradoPorId String
+  registradoPor   Usuario  @relation(fields: [registradoPorId], references: [id])
+  creadoEn        DateTime @default(now())
+
+  @@unique([clienteId, fecha])
 }
 
 // ---------- VENTAS ----------
