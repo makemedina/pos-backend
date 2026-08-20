@@ -221,6 +221,28 @@ export async function corteDelDia(
     prisma.configuracion.findUnique({ where: { id: 'singleton' } }),
   ]);
 
+  // Para el chequeo de balanza (mas abajo): si el corte anterior no fue
+  // justo ayer -- se le olvido a alguien capturarlo un dia -- se usa la
+  // utilidad/gastos ACUMULADOS desde ese corte hasta hoy, no solo los de
+  // HOY. Sin esto, "balanzaEsperada" = balanzaAyer + utilidadDia -
+  // gastosDia siempre usaba solo el dia de hoy, y la utilidad/gastos de
+  // cualquier dia saltado de por medio nunca se sumaban en ningun lado
+  // -- el chequeo quedaba roto para siempre hasta capturar ese dia a
+  // mano. Cuando no hay hueco (corte anterior fue ayer), esto da
+  // exactamente lo mismo que utilidadDia/gastosDia.
+  const { utilidadDia: utilidadAcumuladaDesdeUltimoCorte, gastosDia: gastosAcumuladosDesdeUltimoCorte } =
+    corteAnterior
+      ? await utilidadYGastosDelDia(
+          (() => {
+            const d = new Date(corteAnterior.fecha);
+            d.setDate(d.getDate() + 1);
+            d.setHours(0, 0, 0, 0);
+            return d;
+          })(),
+          fin
+        )
+      : { utilidadDia, gastosDia };
+
   const totalVendido = ventasHoy.reduce((acc, v) => acc + Number(v.total), 0);
   const totalCobrado = ventasHoy.reduce(
     (acc, v) => acc + (Number(v.total) - Number(v.saldoPendiente)),
@@ -330,7 +352,10 @@ export async function corteDelDia(
   // usando estos mismos numeros (cartera, valorInventario, cuentasPorPagar)
   // mas lo que vaya tecleando.
   const balanzaAyer = corteAnterior ? Number(corteAnterior.balanzaTotal) : null;
-  const balanzaEsperada = balanzaAyer !== null ? balanzaAyer + utilidadDia - gastosDia : null;
+  const balanzaEsperada =
+    balanzaAyer !== null
+      ? balanzaAyer + utilidadAcumuladaDesdeUltimoCorte - gastosAcumuladosDesdeUltimoCorte
+      : null;
   // Para el cuadre de efectivo (distinto de la balanza): cuanto efectivo
   // quedo contado el corte anterior, punto de partida del dia de hoy.
   const efectivoAyer = corteAnterior ? Number(corteAnterior.efectivoContado) : null;
@@ -589,18 +614,57 @@ export async function listarCortes() {
   });
 
   let balanzaPrevia: number | null = null;
+  let fechaPrevia: Date | null = null;
 
-  const mapeados = cortes.map((c) => {
+  const mapeados: Array<{
+    id: string;
+    fecha: Date;
+    efectivoContado: number;
+    saldoBancoContado: number;
+    utilidadDia: number;
+    gastosDia: number;
+    valorInventario: number;
+    balanzaTotal: number;
+    balanzaEsperada: number | null;
+    diferenciaCuadre: number | null;
+    registradoPor: string;
+    actualizadoEn: Date;
+    observacion: string | null;
+  }> = [];
+
+  for (const c of cortes) {
     const utilidadDia = Number(c.utilidadDia);
     const gastosDia = Number(c.gastosDia);
     const balanzaTotal = Number(c.balanzaTotal);
+    const fechaCorte = normalizarFecha(c.fecha);
 
-    const balanzaEsperada = balanzaPrevia !== null ? balanzaPrevia + utilidadDia - gastosDia : null;
+    let balanzaEsperada: number | null = null;
+    if (balanzaPrevia !== null && fechaPrevia !== null) {
+      const diasDeDiferencia = Math.round(
+        (fechaCorte.getTime() - fechaPrevia.getTime()) / (1000 * 60 * 60 * 24)
+      );
+      if (diasDeDiferencia > 1) {
+        // Se salto al menos un dia entre este corte y el anterior -- se
+        // usa la utilidad/gastos ACUMULADOS de todo ese hueco (no solo
+        // el utilidadDia/gastosDia de ESTE corte, que solo refleja su
+        // propio dia), igual que en corteDelDia().
+        const inicioHueco = new Date(fechaPrevia);
+        inicioHueco.setDate(inicioHueco.getDate() + 1);
+        const { utilidadDia: utilidadAcumulada, gastosDia: gastosAcumulados } = await utilidadYGastosDelDia(
+          inicioHueco,
+          finDelDia(fechaCorte)
+        );
+        balanzaEsperada = balanzaPrevia + utilidadAcumulada - gastosAcumulados;
+      } else {
+        balanzaEsperada = balanzaPrevia + utilidadDia - gastosDia;
+      }
+    }
     const diferenciaCuadre = balanzaEsperada !== null ? balanzaTotal - balanzaEsperada : null;
 
     balanzaPrevia = balanzaTotal;
+    fechaPrevia = fechaCorte;
 
-    return {
+    mapeados.push({
       id: c.id,
       fecha: c.fecha,
       efectivoContado: Number(c.efectivoContado),
@@ -614,8 +678,8 @@ export async function listarCortes() {
       registradoPor: c.registradoPor.nombre,
       actualizadoEn: c.actualizadoEn,
       observacion: c.observacion,
-    };
-  });
+    });
+  }
 
   return mapeados.reverse(); // mas reciente primero, como antes
 }
