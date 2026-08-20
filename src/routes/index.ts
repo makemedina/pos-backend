@@ -289,6 +289,15 @@ router.post('/auth/logout', async (req, res) => {
   res.status(204).send();
 });
 
+// Usado al abrir la app con un token guardado (ej. localStorage en el
+// celular/PWA): valida que la sesion siga viva y regresa el usuario con
+// sus permisos actuales, sin que el usuario tenga que volver a
+// escribir telefono/PIN. requireAuth (linea arriba) ya rechaza con 401
+// si el token no existe o expiro.
+router.get('/auth/me', async (req, res) => {
+  res.json({ usuario: req.usuario });
+});
+
 // ---------- USUARIOS (solo administrador) ----------
 
 router.get('/usuarios', requiereAdmin, async (_req, res) => {

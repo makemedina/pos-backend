@@ -9,6 +9,7 @@ declare global {
       usuario?: {
         id: string;
         nombre: string;
+        telefono: string;
         rolBase: string;
         permisos: {
           puedeVerCostos: boolean;

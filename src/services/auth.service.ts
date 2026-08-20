@@ -127,6 +127,7 @@ export async function obtenerUsuarioPorToken(token: string) {
   return {
     id: sesion.usuario.id,
     nombre: sesion.usuario.nombre,
+    telefono: sesion.usuario.telefono,
     rolBase: sesion.usuario.rolBase,
     permisos: mapPermisos(sesion.usuario),
   };
