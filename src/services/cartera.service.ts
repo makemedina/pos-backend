@@ -237,17 +237,46 @@ async function calcularSaldoTotalCliente(tx: Prisma.TransactionClient, clienteId
   return Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
 }
 
-/** Registra un abono a una sola venta a credito. */
+export interface PagoParcial {
+  monto: number;
+  metodoPago: string;
+}
+
+/**
+ * Registra un abono a una sola venta a credito -- puede venir repartido
+ * en varios metodos (ej. $300 en efectivo + $200 por transferencia),
+ * igual que ya se podia hacer con el pago inicial de una venta nueva.
+ * Cada metodo se aplica como su propio PagoVenta, uno tras otro, DENTRO
+ * de la misma transaccion -- el candado de fila de aplicarPagoVenta
+ * hace que el segundo metodo ya vea el saldo actualizado por el primero.
+ */
 export async function registrarPagoVenta(
   ventaId: string,
-  monto: number,
-  metodoPago: string,
+  pagos: PagoParcial[],
   registradoPorId: string
 ) {
+  const pagosValidos = pagos.filter((p) => p.monto > 0);
+  if (pagosValidos.length === 0) {
+    throw new MontoPagoInvalidoError('Debes capturar un monto mayor a cero');
+  }
+
   return prisma.$transaction(async (tx) => {
-    const { pago, venta, saldoNotaRestante } = await aplicarPagoVenta(tx, ventaId, monto, metodoPago, registradoPorId);
-    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, venta.clienteId);
-    return { pago, saldoTotalCliente, saldoNotaRestante };
+    const pagosCreados = [];
+    let clienteId = '';
+    let saldoNotaRestante = 0;
+    for (const p of pagosValidos) {
+      const resultado = await aplicarPagoVenta(tx, ventaId, p.monto, p.metodoPago, registradoPorId);
+      pagosCreados.push(resultado.pago);
+      clienteId = resultado.venta.clienteId;
+      saldoNotaRestante = resultado.saldoNotaRestante;
+    }
+    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
+    return {
+      pagos: pagosCreados,
+      montoTotal: pagosValidos.reduce((acc, p) => acc + p.monto, 0),
+      saldoTotalCliente,
+      saldoNotaRestante,
+    };
   });
 }
 

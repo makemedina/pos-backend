@@ -1409,8 +1409,12 @@ router.get('/ventas/:id/pagos', requierePermiso('puedeVerCarteraGeneral'), async
 
 router.post('/ventas/:id/pagos', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
   try {
-    const { monto, metodoPago } = req.body;
-    const pago = await registrarPagoVenta(req.params.id, Number(monto), metodoPago, req.usuario!.id);
+    // Compatibilidad: acepta tanto {monto, metodoPago} (un solo metodo)
+    // como {pagos: [{monto, metodoPago}, ...]} (repartido en varios).
+    const pagos = Array.isArray(req.body.pagos)
+      ? req.body.pagos.map((p: any) => ({ monto: Number(p.monto), metodoPago: p.metodoPago }))
+      : [{ monto: Number(req.body.monto), metodoPago: req.body.metodoPago }];
+    const pago = await registrarPagoVenta(req.params.id, pagos, req.usuario!.id);
     res.status(201).json(pago);
   } catch (err) {
     if (err instanceof MontoPagoInvalidoError) {
