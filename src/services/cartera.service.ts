@@ -289,41 +289,82 @@ export interface AsignacionPagoMultiple {
  * Registra UN pago que un cliente entrega y que se reparte entre varias
  * de sus notas a credito, con el monto especifico que se le asigna a
  * cada una (ej. el cliente da $10,000 y se asignan $3,000 a tres notas y
- * $1,000 a otra). Cada asignacion se procesa con la misma logica de
- * prorrateo por linea que un abono individual, todo en una sola
- * transaccion para que quede todo o nada.
+ * $1,000 a otra). El pago recibido puede a su vez venir repartido en
+ * varios metodos (ej. parte en efectivo y parte por transferencia) --
+ * se recorren los metodos y las notas en paralelo, como fichas que se
+ * van acomodando: si el efectivo no alcanza para completar una nota, el
+ * resto de esa nota lo cubre el siguiente metodo de la lista, generando
+ * mas de un PagoVenta para esa nota. Cada asignacion se procesa con la
+ * misma logica de prorrateo por linea que un abono individual, todo en
+ * una sola transaccion para que quede todo o nada.
  */
 export async function registrarPagoMultiNota(
   clienteId: string,
   asignaciones: AsignacionPagoMultiple[],
-  metodoPago: string,
+  pagos: PagoParcial[],
   registradoPorId: string
 ) {
   const asignacionesValidas = asignaciones.filter((a) => a.monto > 0);
   if (asignacionesValidas.length === 0) {
     throw new MontoPagoInvalidoError('Debes asignar un monto mayor a cero a al menos una nota');
   }
+  const pagosValidos = pagos.filter((p) => p.monto > 0);
+  if (pagosValidos.length === 0) {
+    throw new MontoPagoInvalidoError('Debes capturar un monto mayor a cero');
+  }
+  const totalAsignado = asignacionesValidas.reduce((acc, a) => acc + a.monto, 0);
+  const totalPagos = pagosValidos.reduce((acc, p) => acc + p.monto, 0);
+  if (Math.abs(totalAsignado - totalPagos) > 0.01) {
+    throw new MontoPagoInvalidoError(
+      'El total repartido entre los metodos de pago debe ser igual al total asignado a las notas'
+    );
+  }
 
   return prisma.$transaction(async (tx) => {
-    const detalle: { ventaId: string; folio: number; monto: number; saldoNotaRestante: number }[] = [];
+    const detallePorNota = new Map<
+      string,
+      { ventaId: string; folio: number; monto: number; saldoNotaRestante: number }
+    >();
     let totalPagado = 0;
 
-    for (const asignacion of asignacionesValidas) {
-      const { venta, saldoNotaRestante } = await aplicarPagoVenta(
-        tx,
-        asignacion.ventaId,
-        asignacion.monto,
-        metodoPago,
-        registradoPorId,
-        clienteId
-      );
-      totalPagado += asignacion.monto;
-      detalle.push({ ventaId: asignacion.ventaId, folio: venta.folio, monto: asignacion.monto, saldoNotaRestante });
+    let indiceAsignacion = 0;
+    let restanteAsignacionActual = asignacionesValidas[0].monto;
+
+    for (const pago of pagosValidos) {
+      let restantePago = pago.monto;
+      while (restantePago > 0 && indiceAsignacion < asignacionesValidas.length) {
+        const asignacion = asignacionesValidas[indiceAsignacion];
+        const monto = Math.min(restantePago, restanteAsignacionActual);
+        if (monto > 0) {
+          const { venta, saldoNotaRestante } = await aplicarPagoVenta(
+            tx,
+            asignacion.ventaId,
+            monto,
+            pago.metodoPago,
+            registradoPorId,
+            clienteId
+          );
+          totalPagado += monto;
+          const previo = detallePorNota.get(asignacion.ventaId);
+          detallePorNota.set(asignacion.ventaId, {
+            ventaId: asignacion.ventaId,
+            folio: venta.folio,
+            monto: (previo?.monto ?? 0) + monto,
+            saldoNotaRestante,
+          });
+        }
+        restantePago -= monto;
+        restanteAsignacionActual -= monto;
+        if (restanteAsignacionActual <= 0) {
+          indiceAsignacion += 1;
+          restanteAsignacionActual = asignacionesValidas[indiceAsignacion]?.monto ?? 0;
+        }
+      }
     }
 
     const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
 
-    return { detalle, totalPagado, saldoTotalCliente };
+    return { detalle: Array.from(detallePorNota.values()), totalPagado, saldoTotalCliente };
   });
 }
 

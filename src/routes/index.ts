@@ -1370,7 +1370,7 @@ router.get('/cartera/clientes/:clienteId/notas', requierePermiso('puedeVerCarter
 
 router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
   try {
-    const { asignaciones, metodoPago } = req.body;
+    const { asignaciones, metodoPago, pagos } = req.body;
     if (!Array.isArray(asignaciones) || asignaciones.length === 0) {
       return res.status(400).json({ error: 'Debes enviar al menos una asignacion de pago', code: 'MONTO_INVALIDO' });
     }
@@ -1378,10 +1378,15 @@ router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistra
       ventaId: String(a.ventaId),
       monto: Number(a.monto),
     }));
+    // Compatibilidad: acepta tanto {metodoPago} (un solo metodo para todo
+    // el pago) como {pagos: [{monto, metodoPago}, ...]} (repartido).
+    const pagosNormalizados = Array.isArray(pagos)
+      ? pagos.map((p: any) => ({ monto: Number(p.monto), metodoPago: p.metodoPago }))
+      : [{ monto: asignacionesNormalizadas.reduce((acc, a) => acc + a.monto, 0), metodoPago }];
     const resultado = await registrarPagoMultiNota(
       req.params.clienteId,
       asignacionesNormalizadas,
-      metodoPago,
+      pagosNormalizados,
       req.usuario!.id
     );
     res.status(201).json(resultado);
