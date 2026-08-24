@@ -346,6 +346,66 @@ function normalizarFecha(fecha: Date) {
   return f;
 }
 
+const MIN_VENTAS_PARA_SUGERENCIA = 3;
+const MIN_REPETICIONES_DIA = 2;
+
+/**
+ * Analiza el historial de ventas de cada cliente SIN dias de llamada
+ * configurados todavia (diasLlamada vacio) y, si compra seguido el mismo
+ * dia de la semana, se lo configura solo -- para no dejarlo en blanco
+ * hasta que alguien lo revise a mano. Si el cliente ya tiene dias
+ * configurados (aunque sea por esta misma funcion antes), NUNCA se
+ * tocan -- la sugerencia automatica es de una sola vez, cualquier ajuste
+ * despues es responsabilidad de quien lo edite a mano.
+ *
+ * Requiere al menos 3 ventas para intentar sugerir algo (con menos, no
+ * hay suficiente historia para saber si es un patron real o casualidad),
+ * y que el dia mas repetido tenga al menos 2 compras -- si no, se deja
+ * sin sugerencia en vez de forzar un dia poco convincente.
+ *
+ * Se corre automaticamente cada noche (ver cron.ts) y tambien una vez al
+ * arrancar el servidor, asi que no hace falta pedirlo a mano.
+ */
+export async function sugerirDiasCompraAutomaticamente() {
+  const clientesSinDias = await prisma.cliente.findMany({
+    where: { diasLlamada: { equals: [] } },
+    select: { id: true },
+  });
+  if (clientesSinDias.length === 0) return { clientesActualizados: 0 };
+
+  const idsSinDias = clientesSinDias.map((c) => c.id);
+  const ventas = await prisma.venta.findMany({
+    where: { clienteId: { in: idsSinDias }, cancelada: false },
+    select: { clienteId: true, fecha: true },
+  });
+
+  const conteoPorCliente = new Map<string, number[]>();
+  for (const v of ventas) {
+    const conteos = conteoPorCliente.get(v.clienteId) ?? new Array(7).fill(0);
+    conteos[v.fecha.getDay()] += 1;
+    conteoPorCliente.set(v.clienteId, conteos);
+  }
+
+  let clientesActualizados = 0;
+  for (const [clienteId, conteos] of conteoPorCliente) {
+    const totalVentas = conteos.reduce((a, b) => a + b, 0);
+    if (totalVentas < MIN_VENTAS_PARA_SUGERENCIA) continue;
+
+    const maxConteo = Math.max(...conteos);
+    if (maxConteo < MIN_REPETICIONES_DIA) continue;
+
+    const diasSugeridos = conteos
+      .map((c, dia) => ({ dia, c }))
+      .filter((x) => x.c === maxConteo)
+      .map((x) => x.dia);
+
+    await prisma.cliente.update({ where: { id: clienteId }, data: { diasLlamada: diasSugeridos } });
+    clientesActualizados += 1;
+  }
+
+  return { clientesActualizados };
+}
+
 /** Configura que dias de la semana (0=domingo...6=sabado) hay que llamarle a este cliente/prospecto. */
 export async function actualizarDiasLlamadaCliente(clienteId: string, dias: number[]) {
   const diasValidos = [...new Set(dias.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort(
