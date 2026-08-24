@@ -194,9 +194,10 @@ export async function corteDelDia(
       where: { cancelada: false, OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }] },
       _sum: { saldoPendiente: true },
     }),
-    prisma.compra.aggregate({
-      where: { estadoPago: { in: ['pendiente', 'parcial'] } },
-      _sum: { saldoPendiente: true },
+    prisma.compra.findMany({
+      where: { estadoPago: { in: ['pendiente', 'parcial'] }, cancelada: false },
+      include: { proveedor: true },
+      orderBy: { fecha: 'asc' },
     }),
     prisma.cliente.aggregate({ _sum: { saldoInicial: true } }),
     utilidadYGastosDelDia(inicioDia, fin),
@@ -344,7 +345,48 @@ export async function corteDelDia(
 
   const carteraPendiente =
     Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
-  const cuentasPorPagar = Number(porPagar._sum.saldoPendiente ?? 0);
+  const cuentasPorPagar = porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0);
+
+  // Mismas facturas de "cuentasPorPagar", pero desglosadas por proveedor
+  // (orden alfabetico) y dentro de cada uno por antiguedad (la mas vieja
+  // primero) -- para que en el corte se vea de un vistazo a quien se le
+  // debe y desde cuando, no solo el total.
+  const ahoraParaAntiguedad = Date.now();
+  const unDiaMs = 1000 * 60 * 60 * 24;
+  const facturasPorProveedor = new Map<
+    string,
+    { proveedorId: string; proveedorNombre: string; facturas: typeof porPagar; subtotal: number }
+  >();
+  for (const c of porPagar) {
+    const grupo = facturasPorProveedor.get(c.proveedorId) ?? {
+      proveedorId: c.proveedorId,
+      proveedorNombre: c.proveedor.nombre,
+      facturas: [] as typeof porPagar,
+      subtotal: 0,
+    };
+    grupo.facturas.push(c);
+    grupo.subtotal += Number(c.saldoPendiente);
+    facturasPorProveedor.set(c.proveedorId, grupo);
+  }
+  const facturasPendientesPorProveedor = Array.from(facturasPorProveedor.values())
+    .sort((a, b) => a.proveedorNombre.localeCompare(b.proveedorNombre))
+    .map((grupo) => ({
+      proveedorId: grupo.proveedorId,
+      proveedorNombre: grupo.proveedorNombre,
+      subtotal: grupo.subtotal,
+      facturas: grupo.facturas
+        .slice()
+        .sort((a, b) => a.fecha.getTime() - b.fecha.getTime())
+        .map((c) => ({
+          id: c.id,
+          numeroFactura: c.numeroFactura,
+          fecha: c.fecha,
+          fechaVencimiento: c.fechaVencimiento,
+          total: Number(c.total),
+          saldoPendiente: Number(c.saldoPendiente),
+          diasAntiguedad: Math.floor((ahoraParaAntiguedad - c.fecha.getTime()) / unDiaMs),
+        })),
+    }));
 
   // OJO: aqui todavia no se puede calcular la balanza completa de hoy --
   // le faltan el efectivo y el banco, que el usuario apenas va a contar.
@@ -475,6 +517,7 @@ export async function corteDelDia(
     },
     cartera: carteraPendiente,
     cuentasPorPagar,
+    facturasPendientesPorProveedor,
     saldoBancoSistema: configuracion ? Number(configuracion.saldoBancoActual) : 0,
     saldoEfectivoSistema: configuracion ? Number(configuracion.saldoEfectivoActual) : 0,
     canceladas: {
