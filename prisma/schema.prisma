@@ -439,6 +439,10 @@ model Configuracion {
   logoBase64        String? // logo guardado como texto base64, se muestra tal cual en el recibo
   telefono          String  @default("")
   direccion         String  @default("")
+  // Direccion adonde los proveedores deben entregar la mercancia -- puede
+  // ser distinta a la del negocio (encabezado del recibo) si se recibe en
+  // otro lugar (ej. bodega). Solo informativa, no aparece en el recibo.
+  direccionEntrega  String  @default("")
   notasNegocio      String  @default("")
 
   // Configuracion del recibo
