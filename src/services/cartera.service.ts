@@ -63,6 +63,38 @@ export async function resumenCarteraClientes() {
     .sort((a, b) => b.saldoTotal - a.saldoTotal);
 }
 
+const DIAS_ANTIGUEDAD_NOTA = 7;
+
+/**
+ * Notas a credito con saldo pendiente que llevan mas de una semana sin
+ * liquidarse -- para avisar apenas se entra, igual que "clientes en
+ * riesgo" o "lotes con antiguedad", en vez de descubrirlas hasta que ya
+ * llevan mucho tiempo sin cobrarse.
+ */
+export async function notasAntiguas() {
+  const ventas = await prisma.venta.findMany({
+    where: { cancelada: false, esCredito: true, saldoPendiente: { gt: 0 } },
+    include: { cliente: { select: { id: true, nombre: true, telefono: true } } },
+    orderBy: { fecha: 'asc' },
+  });
+
+  const ahora = Date.now();
+  const unDiaMs = 1000 * 60 * 60 * 24;
+
+  return ventas
+    .map((v) => ({
+      id: v.id,
+      folio: v.folio,
+      clienteId: v.cliente.id,
+      clienteNombre: v.cliente.nombre,
+      clienteTelefono: v.cliente.telefono,
+      saldoPendiente: Number(v.saldoPendiente),
+      fecha: v.fecha,
+      diasAntiguedad: Math.floor((ahora - v.fecha.getTime()) / unDiaMs),
+    }))
+    .filter((n) => n.diasAntiguedad >= DIAS_ANTIGUEDAD_NOTA);
+}
+
 /**
  * Nivel 2 de Cartera: las notas (ventas a credito) de un cliente en
  * particular. Por default solo las que tienen saldo pendiente; con

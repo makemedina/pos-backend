@@ -49,6 +49,7 @@ import {
 } from '../services/auth.service';
 import {
   resumenCarteraClientes,
+  notasAntiguas,
   notasClienteCredito,
   registrarPagoVenta,
   registrarPagoMultiNota,
@@ -1354,6 +1355,16 @@ router.get('/cartera/clientes', requierePermiso('puedeVerCarteraGeneral'), async
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al consultar cartera de clientes' });
+  }
+});
+
+router.get('/cartera/notas-antiguas', requierePermiso('puedeVerCarteraGeneral'), async (_req, res) => {
+  try {
+    const notas = await notasAntiguas();
+    res.json(notas);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar notas antiguas' });
   }
 });
 
