@@ -35,12 +35,18 @@ export async function crearClienteRapido(nombre: string, telefono: string) {
 }
 
 /** Alta completa desde la pantalla de Clientes (con domicilio opcional). */
-export async function crearCliente(datos: { nombre: string; telefono: string; direccion?: string }) {
+export async function crearCliente(datos: {
+  nombre: string;
+  telefono: string;
+  direccion?: string;
+  direccionEntrega?: string;
+}) {
   return prisma.cliente.create({
     data: {
       nombre: datos.nombre,
       telefono: datos.telefono,
       direccion: datos.direccion || undefined,
+      direccionEntrega: datos.direccionEntrega || undefined,
     },
   });
 }
@@ -188,6 +194,7 @@ export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sin
     nombre: c.nombre,
     telefono: c.telefono,
     direccion: c.direccion,
+    direccionEntrega: c.direccionEntrega,
     permiteVentaCredito: c.permiteVentaCredito,
     saldoInicial: Number(c.saldoInicial),
     saldoTotal: calcularSaldoTotal(c.ventas, c.saldoInicial),
@@ -209,6 +216,7 @@ export async function obtenerClienteDetalle(clienteId: string) {
     nombre: cliente.nombre,
     telefono: cliente.telefono,
     direccion: cliente.direccion,
+    direccionEntrega: cliente.direccionEntrega,
     permiteVentaCredito: cliente.permiteVentaCredito,
     saldoInicial: Number(cliente.saldoInicial),
     saldoTotal: calcularSaldoTotal(cliente.ventas, cliente.saldoInicial),
@@ -220,6 +228,7 @@ interface ActualizarClienteInput {
   nombre?: string;
   telefono?: string;
   direccion?: string;
+  direccionEntrega?: string;
   permiteVentaCredito?: boolean;
 }
 

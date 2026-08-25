@@ -202,7 +202,12 @@ model Cliente {
   nombre              String
   telefono            String
   email               String?
+  // Direccion del negocio del cliente. Algunos clientes reciben la
+  // mercancia en un lugar distinto (ej. una bodega) -- direccionEntrega
+  // es opcional; cuando esta vacia, se asume que reciben en esta misma
+  // direccion.
   direccion           String?
+  direccionEntrega    String?
   notas               String?
   permiteVentaCredito Boolean  @default(true)
   // Saldo que el cliente ya debia ANTES de usar el sistema (cartera
@@ -439,10 +444,6 @@ model Configuracion {
   logoBase64        String? // logo guardado como texto base64, se muestra tal cual en el recibo
   telefono          String  @default("")
   direccion         String  @default("")
-  // Direccion adonde los proveedores deben entregar la mercancia -- puede
-  // ser distinta a la del negocio (encabezado del recibo) si se recibe en
-  // otro lugar (ej. bodega). Solo informativa, no aparece en el recibo.
-  direccionEntrega  String  @default("")
   notasNegocio      String  @default("")
 
   // Configuracion del recibo
