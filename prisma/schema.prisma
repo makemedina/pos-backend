@@ -397,6 +397,11 @@ model Gasto {
   monto          Decimal        @db.Decimal(12, 2)
   metodoPago     String
   fecha          DateTime       @default(now())
+  // Key del objeto en R2 con la foto del comprobante (ver backup.service.ts,
+  // mismo bucket). Obligatoria para gastos nuevos (se exige en la ruta),
+  // pero el campo queda opcional en la base porque los gastos de antes de
+  // este cambio no tienen foto.
+  fotoComprobanteKey String?
   cancelado       Boolean   @default(false)
   canceladoEn     DateTime?
   canceladoPorId  String?

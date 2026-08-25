@@ -35,7 +35,10 @@ export class BackupNoConfiguradoError extends Error {
   }
 }
 
-function clienteR2(): S3Client {
+// clienteR2/nombreBucket tambien las usa gastos.service.ts (fotos de
+// comprobante) -- es el mismo bucket de R2, solo con otro prefijo de
+// key, asi que se comparte el cliente en vez de configurarlo dos veces.
+export function clienteR2(): S3Client {
   const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
   if (!R2_ACCOUNT_ID) throw new BackupNoConfiguradoError('R2_ACCOUNT_ID');
   if (!R2_ACCESS_KEY_ID) throw new BackupNoConfiguradoError('R2_ACCESS_KEY_ID');
@@ -51,7 +54,7 @@ function clienteR2(): S3Client {
   });
 }
 
-function nombreBucket(): string {
+export function nombreBucket(): string {
   const bucket = process.env.R2_BUCKET_NAME;
   if (!bucket) throw new BackupNoConfiguradoError('R2_BUCKET_NAME');
   return bucket;

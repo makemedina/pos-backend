@@ -1,6 +1,69 @@
+import { randomUUID } from 'crypto';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente } from './configuracion.service';
+import { clienteR2, nombreBucket } from './backup.service';
+
+const PREFIJO_COMPROBANTES = 'recibos-gastos/';
+
+const EXTENSION_POR_TIPO: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/heic': 'heic',
+};
+
+export class TipoFotoInvalidoError extends Error {
+  constructor() {
+    super('La foto del comprobante debe ser una imagen (jpg, png, webp o heic).');
+  }
+}
+
+/**
+ * Sube la foto del comprobante de un gasto al mismo bucket de R2 que ya
+ * se usa para los respaldos (ver backup.service.ts), con su propio
+ * prefijo. Se sube ANTES de crear el registro del gasto -- si la subida
+ * falla, no se crea un gasto sin foto (la foto es obligatoria).
+ */
+export async function subirFotoComprobanteGasto(buffer: Buffer, contentType: string): Promise<string> {
+  const extension = EXTENSION_POR_TIPO[contentType];
+  if (!extension) throw new TipoFotoInvalidoError();
+
+  const s3 = clienteR2();
+  const key = `${PREFIJO_COMPROBANTES}${randomUUID()}.${extension}`;
+  const subida = new Upload({
+    client: s3,
+    params: { Bucket: nombreBucket(), Key: key, Body: buffer, ContentType: contentType },
+  });
+  await subida.done();
+  return key;
+}
+
+/** Regresa la foto del comprobante como stream, para mandarla directo al navegador. */
+export async function descargarFotoComprobanteGasto(key: string) {
+  const s3 = clienteR2();
+  const objeto = await s3.send(new GetObjectCommand({ Bucket: nombreBucket(), Key: key }));
+  if (!objeto.Body) throw new Error('No se pudo leer la foto del comprobante.');
+  return { cuerpo: objeto.Body as NodeJS.ReadableStream, contentType: objeto.ContentType };
+}
+
+export async function obtenerGastoPorId(gastoId: string) {
+  return prisma.gasto.findUniqueOrThrow({ where: { id: gastoId } });
+}
+
+/** Mismo criterio que listarGastos: solo el dueno del gasto o quien puede ver los de todos. */
+export function puedeVerGasto(
+  gasto: { registradoPorId: string },
+  usuario: { id: string; rolBase: string; permisos: { puedeVerGastosTodos: boolean } | null }
+) {
+  return (
+    usuario.rolBase === 'administrador' ||
+    !!usuario.permisos?.puedeVerGastosTodos ||
+    gasto.registradoPorId === usuario.id
+  );
+}
 
 // Categorias tipicas de un ERP para gastos operativos de un negocio pequeno.
 // Se crean automaticamente la primera vez que se piden las categorias y
@@ -67,6 +130,7 @@ export async function crearGasto(input: {
   concepto: string;
   monto: number;
   metodoPago: string;
+  fotoComprobanteKey: string;
 }) {
   return prisma.$transaction(async (tx) => {
     if (input.metodoPago === 'transferencia') {

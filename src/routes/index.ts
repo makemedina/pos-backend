@@ -59,7 +59,23 @@ import {
   PagoYaCanceladoError,
   AutorizacionCancelacionPagoInvalidaError,
 } from '../services/cartera.service';
-import { crearCategoriaGasto, crearGasto, listarCategoriasGasto, listarGastos, cancelarGasto, GastoYaCanceladoError, AutorizacionCancelacionGastoInvalidaError } from '../services/gastos.service';
+import multer from 'multer';
+import {
+  crearCategoriaGasto,
+  crearGasto,
+  listarCategoriasGasto,
+  listarGastos,
+  cancelarGasto,
+  GastoYaCanceladoError,
+  AutorizacionCancelacionGastoInvalidaError,
+  subirFotoComprobanteGasto,
+  descargarFotoComprobanteGasto,
+  obtenerGastoPorId,
+  puedeVerGasto,
+  TipoFotoInvalidoError,
+} from '../services/gastos.service';
+
+const subidaComprobante = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 import { registrarDeposito, listarDepositos, cancelarDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
 import {
   crearCotizacion,
@@ -397,17 +413,65 @@ router.get('/gastos', async (req, res) => {
   }
 });
 
-router.post('/gastos', async (req, res) => {
+// multipart/form-data: los campos del gasto vienen como texto normal
+// (req.body, gracias a multer) mas el archivo "foto" -- la foto del
+// comprobante es obligatoria para registrar un gasto.
+router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Falta la foto del comprobante.', code: 'FOTO_REQUERIDA' });
+    }
+    const fotoComprobanteKey = await subirFotoComprobanteGasto(req.file.buffer, req.file.mimetype);
     // registradoPorId ya no viene del body: siempre es quien esta logueado.
-    const gasto = await crearGasto({ ...req.body, registradoPorId: req.usuario!.id });
+    const gasto = await crearGasto({
+      categoriaId: req.body.categoriaId,
+      proveedorId: req.body.proveedorId || undefined,
+      concepto: req.body.concepto,
+      monto: Number(req.body.monto),
+      metodoPago: req.body.metodoPago,
+      registradoPorId: req.usuario!.id,
+      fotoComprobanteKey,
+    });
     res.status(201).json(gasto);
   } catch (err) {
     if (err instanceof SaldoBancoInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
     }
+    if (err instanceof TipoFotoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
+    }
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el gasto' });
+  }
+});
+
+router.get('/gastos/:id/comprobante', async (req, res) => {
+  try {
+    const gasto = await obtenerGastoPorId(req.params.id);
+    if (!puedeVerGasto(gasto, req.usuario!)) {
+      return res.status(403).json({ error: 'No tienes permiso para ver este comprobante.' });
+    }
+    if (!gasto.fotoComprobanteKey) {
+      return res.status(404).json({ error: 'Este gasto no tiene foto de comprobante.' });
+    }
+    const { cuerpo, contentType } = await descargarFotoComprobanteGasto(gasto.fotoComprobanteKey);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    (cuerpo as any).pipe(res);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener el comprobante' });
   }
 });
 
