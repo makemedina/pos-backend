@@ -19,6 +19,63 @@ function finDelDia(inicioDia: Date) {
   return f;
 }
 
+type CompraConProveedor = {
+  id: string;
+  proveedorId: string;
+  proveedor: { nombre: string };
+  numeroFactura: string | null;
+  fecha: Date;
+  fechaVencimiento: Date | null;
+  total: any;
+  saldoPendiente: any;
+};
+
+/**
+ * Agrupa facturas de compra pendientes por proveedor (orden alfabetico),
+ * y dentro de cada uno por antiguedad (la mas vieja primero) -- para que
+ * en el corte se vea de un vistazo a quien se le debe y desde cuando, no
+ * solo el total. Se usa tanto para la vista previa del corte de hoy como
+ * para lo que se guarda al capturarlo (y luego se reimprime tal cual).
+ */
+function agruparFacturasPendientes(compras: CompraConProveedor[]) {
+  const ahora = Date.now();
+  const unDiaMs = 1000 * 60 * 60 * 24;
+  const porProveedor = new Map<
+    string,
+    { proveedorId: string; proveedorNombre: string; facturas: CompraConProveedor[]; subtotal: number }
+  >();
+  for (const c of compras) {
+    const grupo = porProveedor.get(c.proveedorId) ?? {
+      proveedorId: c.proveedorId,
+      proveedorNombre: c.proveedor.nombre,
+      facturas: [] as CompraConProveedor[],
+      subtotal: 0,
+    };
+    grupo.facturas.push(c);
+    grupo.subtotal += Number(c.saldoPendiente);
+    porProveedor.set(c.proveedorId, grupo);
+  }
+  return Array.from(porProveedor.values())
+    .sort((a, b) => a.proveedorNombre.localeCompare(b.proveedorNombre))
+    .map((grupo) => ({
+      proveedorId: grupo.proveedorId,
+      proveedorNombre: grupo.proveedorNombre,
+      subtotal: grupo.subtotal,
+      facturas: grupo.facturas
+        .slice()
+        .sort((a, b) => a.fecha.getTime() - b.fecha.getTime())
+        .map((c) => ({
+          id: c.id,
+          numeroFactura: c.numeroFactura,
+          fecha: c.fecha,
+          fechaVencimiento: c.fechaVencimiento,
+          total: Number(c.total),
+          saldoPendiente: Number(c.saldoPendiente),
+          diasAntiguedad: Math.floor((ahora - c.fecha.getTime()) / unDiaMs),
+        })),
+    }));
+}
+
 // Orden fijo para agrupar el reporte del corte: primero efectivo, luego
 // transferencia, y al final lo que todavia no tiene metodo de pago (a
 // credito, sin abono el dia de hoy). Dentro de cada metodo, alfabetico
@@ -346,47 +403,7 @@ export async function corteDelDia(
   const carteraPendiente =
     Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
   const cuentasPorPagar = porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0);
-
-  // Mismas facturas de "cuentasPorPagar", pero desglosadas por proveedor
-  // (orden alfabetico) y dentro de cada uno por antiguedad (la mas vieja
-  // primero) -- para que en el corte se vea de un vistazo a quien se le
-  // debe y desde cuando, no solo el total.
-  const ahoraParaAntiguedad = Date.now();
-  const unDiaMs = 1000 * 60 * 60 * 24;
-  const facturasPorProveedor = new Map<
-    string,
-    { proveedorId: string; proveedorNombre: string; facturas: typeof porPagar; subtotal: number }
-  >();
-  for (const c of porPagar) {
-    const grupo = facturasPorProveedor.get(c.proveedorId) ?? {
-      proveedorId: c.proveedorId,
-      proveedorNombre: c.proveedor.nombre,
-      facturas: [] as typeof porPagar,
-      subtotal: 0,
-    };
-    grupo.facturas.push(c);
-    grupo.subtotal += Number(c.saldoPendiente);
-    facturasPorProveedor.set(c.proveedorId, grupo);
-  }
-  const facturasPendientesPorProveedor = Array.from(facturasPorProveedor.values())
-    .sort((a, b) => a.proveedorNombre.localeCompare(b.proveedorNombre))
-    .map((grupo) => ({
-      proveedorId: grupo.proveedorId,
-      proveedorNombre: grupo.proveedorNombre,
-      subtotal: grupo.subtotal,
-      facturas: grupo.facturas
-        .slice()
-        .sort((a, b) => a.fecha.getTime() - b.fecha.getTime())
-        .map((c) => ({
-          id: c.id,
-          numeroFactura: c.numeroFactura,
-          fecha: c.fecha,
-          fechaVencimiento: c.fechaVencimiento,
-          total: Number(c.total),
-          saldoPendiente: Number(c.saldoPendiente),
-          diasAntiguedad: Math.floor((ahoraParaAntiguedad - c.fecha.getTime()) / unDiaMs),
-        })),
-    }));
+  const facturasPendientesPorProveedor = agruparFacturasPendientes(porPagar);
 
   // OJO: aqui todavia no se puede calcular la balanza completa de hoy --
   // le faltan el efectivo y el banco, que el usuario apenas va a contar.
@@ -419,6 +436,8 @@ export async function corteDelDia(
           valorInventario: Number(corteExistente.valorInventario),
           balanzaTotal: Number(corteExistente.balanzaTotal),
           observacion: corteExistente.observacion,
+          facturasPendientesPorProveedor:
+            (corteExistente.facturasPendientesPorProveedor as unknown as typeof facturasPendientesPorProveedor) ?? [],
         }
       : null,
     inventario: inventarioMovs,
@@ -608,16 +627,18 @@ export async function guardarCorteCaja(
       where: { cancelada: false, OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }] },
       _sum: { saldoPendiente: true },
     }),
-    prisma.compra.aggregate({
-      where: { estadoPago: { in: ['pendiente', 'parcial'] } },
-      _sum: { saldoPendiente: true },
+    prisma.compra.findMany({
+      where: { estadoPago: { in: ['pendiente', 'parcial'] }, cancelada: false },
+      include: { proveedor: true },
+      orderBy: { fecha: 'asc' },
     }),
     prisma.cliente.aggregate({ _sum: { saldoInicial: true } }),
   ]);
 
   const carteraPendiente =
     Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
-  const cuentasPorPagar = Number(porPagar._sum.saldoPendiente ?? 0);
+  const cuentasPorPagar = porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0);
+  const facturasPendientesPorProveedor = agruparFacturasPendientes(porPagar);
   // La balanza es TODOS los activos menos TODOS los pasivos: lo que hay
   // en efectivo y en el banco (lo que se acaba de contar), mas lo que
   // deben los clientes, mas el valor del inventario a costo, menos lo
@@ -637,6 +658,7 @@ export async function guardarCorteCaja(
         valorInventario,
         balanzaTotal,
         observacion: observacion?.trim() || null,
+        facturasPendientesPorProveedor: facturasPendientesPorProveedor as any,
       },
     });
   } catch (err: any) {

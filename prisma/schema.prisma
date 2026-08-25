@@ -495,6 +495,11 @@ model CorteCaja {
   // corte y se puede agregar/editar tanto al capturarlo como despues
   // desde el historico.
   observacion       String?
+  // Fotografia de las facturas de proveedor pendientes de pago al momento
+  // de este corte (agrupadas por proveedor y antiguedad) -- se guarda tal
+  // cual para poder reimprimir el corte despues mostrando lo que se debia
+  // ESE dia, aunque para hoy ya se hayan pagado o haya facturas nuevas.
+  facturasPendientesPorProveedor Json?
 
   @@unique([fecha])
 }
