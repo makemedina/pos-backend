@@ -3,6 +3,23 @@ import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente } from './configuracion.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
+import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
+
+const PREFIJO_FACTURAS = 'facturas-compra/';
+
+/**
+ * Sube la foto de la factura de una compra a R2. Se sube ANTES de crear
+ * el registro de la compra -- si la subida falla, no se crea una compra
+ * sin foto (la foto es obligatoria al capturar una compra normal).
+ */
+export async function subirFotoFacturaCompra(buffer: Buffer, contentType: string): Promise<string> {
+  return subirImagenR2(buffer, contentType, PREFIJO_FACTURAS);
+}
+
+/** Regresa la foto de la factura como stream, para mandarla directo al navegador. */
+export async function descargarFotoFacturaCompra(key: string) {
+  return descargarImagenR2(key);
+}
 
 interface ItemCompraInput {
   varianteId: string;
@@ -18,6 +35,7 @@ interface CrearCompraInput {
   pagoInicial?: number;
   metodoPagoInicial?: string;
   registradoPorId?: string;
+  fotoFacturaKey?: string;
 }
 
 export class MontoPagoCompraInvalidoError extends Error {}
@@ -42,6 +60,7 @@ export async function crearCompra(input: CrearCompraInput) {
         proveedorId: input.proveedorId,
         numeroFactura: input.numeroFactura,
         fechaVencimiento: input.fechaVencimiento,
+        fotoFacturaKey: input.fotoFacturaKey,
         total,
         saldoPendiente,
         estadoPago:
@@ -275,6 +294,7 @@ export async function obtenerDetalleCompra(compraId: string) {
     estadoPago: compra.estadoPago,
     cancelada: compra.cancelada,
     canceladaEn: compra.canceladaEn,
+    fotoFacturaKey: compra.fotoFacturaKey,
     proveedor: { id: compra.proveedor.id, nombre: compra.proveedor.nombre, telefono: compra.proveedor.telefono },
     metodosPago: [...new Set(compra.pagos.map((p) => p.metodoPago))],
     items: compra.lotes.map((l) => ({

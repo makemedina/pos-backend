@@ -158,6 +158,12 @@ model Compra {
   // Herramientas), no compras reales del dia -- para que el Corte de
   // Caja no las cuente como egreso de "hoy" cuando se cargan.
   esCargaInicial    Boolean  @default(false)
+  // Key del objeto en R2 con la foto de la factura (ver imagenesR2.service.ts,
+  // mismo bucket que gastos y respaldos). Obligatoria para compras
+  // nuevas capturadas normalmente (se exige en la ruta), pero el campo
+  // queda opcional en la base porque las compras de antes de este
+  // cambio y las cargadas como saldo inicial no tienen foto.
+  fotoFacturaKey    String?
 
   lotes  LoteInventario[]
   pagos  PagoCompra[]

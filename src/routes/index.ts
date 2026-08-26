@@ -12,7 +12,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
@@ -72,8 +72,8 @@ import {
   descargarFotoComprobanteGasto,
   obtenerGastoPorId,
   puedeVerGasto,
-  TipoFotoInvalidoError,
 } from '../services/gastos.service';
+import { TipoFotoInvalidoError } from '../services/imagenesR2.service';
 
 const subidaComprobante = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
 import { registrarDeposito, listarDepositos, cancelarDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
@@ -895,20 +895,64 @@ router.post('/ventas/:id/cancelar', async (req, res) => {
 
 // ---------- COMPRAS ----------
 
-router.post('/compras', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+// multipart/form-data: los campos escalares de la compra vienen como
+// texto normal (req.body, gracias a multer), "items" viaja como un
+// string JSON (arreglo), y "foto" es la foto de la factura, obligatoria
+// para una compra capturada normalmente.
+router.post('/compras', requierePermiso('puedeRegistrarCompras'), subidaComprobante.single('foto'), async (req, res) => {
   try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Falta la foto de la factura.', code: 'FOTO_REQUERIDA' });
+    }
+    const fotoFacturaKey = await subirFotoFacturaCompra(req.file.buffer, req.file.mimetype);
+    const items = typeof req.body.items === 'string' ? JSON.parse(req.body.items) : req.body.items;
     const compra = await crearCompra({
-      ...req.body,
+      proveedorId: req.body.proveedorId,
+      numeroFactura: req.body.numeroFactura || undefined,
       fechaVencimiento: req.body.fechaVencimiento ? new Date(req.body.fechaVencimiento) : undefined,
+      items,
+      pagoInicial: req.body.pagoInicial !== undefined ? Number(req.body.pagoInicial) : undefined,
+      metodoPagoInicial: req.body.metodoPagoInicial || undefined,
       registradoPorId: req.usuario!.id,
+      fotoFacturaKey,
     });
     res.status(201).json(compra);
   } catch (err) {
     if (err instanceof SaldoBancoInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
     }
+    if (err instanceof TipoFotoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
+    }
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de factura no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar la compra' });
+  }
+});
+
+router.get('/compras/:id/factura', requierePermiso('puedeVerCostos'), async (req, res) => {
+  try {
+    const compra = await obtenerDetalleCompra(req.params.id);
+    if (!compra.fotoFacturaKey) {
+      return res.status(404).json({ error: 'Esta compra no tiene foto de factura.' });
+    }
+    const { cuerpo, contentType } = await descargarFotoFacturaCompra(compra.fotoFacturaKey);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    (cuerpo as any).pipe(res);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de factura no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener la factura' });
   }
 });
 

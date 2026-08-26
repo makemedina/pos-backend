@@ -1,52 +1,22 @@
-import { randomUUID } from 'crypto';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
-import { Upload } from '@aws-sdk/lib-storage';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente } from './configuracion.service';
-import { clienteR2, nombreBucket } from './backup.service';
+import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
 
 const PREFIJO_COMPROBANTES = 'recibos-gastos/';
 
-const EXTENSION_POR_TIPO: Record<string, string> = {
-  'image/jpeg': 'jpg',
-  'image/png': 'png',
-  'image/webp': 'webp',
-  'image/heic': 'heic',
-};
-
-export class TipoFotoInvalidoError extends Error {
-  constructor() {
-    super('La foto del comprobante debe ser una imagen (jpg, png, webp o heic).');
-  }
-}
-
 /**
- * Sube la foto del comprobante de un gasto al mismo bucket de R2 que ya
- * se usa para los respaldos (ver backup.service.ts), con su propio
- * prefijo. Se sube ANTES de crear el registro del gasto -- si la subida
- * falla, no se crea un gasto sin foto (la foto es obligatoria).
+ * Sube la foto del comprobante de un gasto a R2. Se sube ANTES de crear
+ * el registro del gasto -- si la subida falla, no se crea un gasto sin
+ * foto (la foto es obligatoria).
  */
 export async function subirFotoComprobanteGasto(buffer: Buffer, contentType: string): Promise<string> {
-  const extension = EXTENSION_POR_TIPO[contentType];
-  if (!extension) throw new TipoFotoInvalidoError();
-
-  const s3 = clienteR2();
-  const key = `${PREFIJO_COMPROBANTES}${randomUUID()}.${extension}`;
-  const subida = new Upload({
-    client: s3,
-    params: { Bucket: nombreBucket(), Key: key, Body: buffer, ContentType: contentType },
-  });
-  await subida.done();
-  return key;
+  return subirImagenR2(buffer, contentType, PREFIJO_COMPROBANTES);
 }
 
 /** Regresa la foto del comprobante como stream, para mandarla directo al navegador. */
 export async function descargarFotoComprobanteGasto(key: string) {
-  const s3 = clienteR2();
-  const objeto = await s3.send(new GetObjectCommand({ Bucket: nombreBucket(), Key: key }));
-  if (!objeto.Body) throw new Error('No se pudo leer la foto del comprobante.');
-  return { cuerpo: objeto.Body as NodeJS.ReadableStream, contentType: objeto.ContentType };
+  return descargarImagenR2(key);
 }
 
 export async function obtenerGastoPorId(gastoId: string) {
