@@ -183,22 +183,45 @@ function calcularSaldoTotal(ventas: { esCredito: boolean; saldoPendiente: any }[
  * diferencia de la Cartera), con su saldo total, y permite filtrar por
  * si tienen deuda o no.
  */
+const DIAS_ACTIVO = 30;
+
 export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sinDeuda') {
   const clientes = await prisma.cliente.findMany({
-    include: { ventas: { select: { esCredito: true, saldoPendiente: true } } },
+    include: {
+      ventas: {
+        select: { esCredito: true, saldoPendiente: true, fecha: true, cancelada: true, _count: { select: { items: true } } },
+      },
+    },
     orderBy: { nombre: 'asc' },
   });
 
-  const mapeados = clientes.map((c) => ({
-    id: c.id,
-    nombre: c.nombre,
-    telefono: c.telefono,
-    direccion: c.direccion,
-    direccionEntrega: c.direccionEntrega,
-    permiteVentaCredito: c.permiteVentaCredito,
-    saldoInicial: Number(c.saldoInicial),
-    saldoTotal: calcularSaldoTotal(c.ventas, c.saldoInicial),
-  }));
+  const limiteActivo = new Date();
+  limiteActivo.setDate(limiteActivo.getDate() - DIAS_ACTIVO);
+
+  const mapeados = clientes.map((c) => {
+    // "Activo" = compro algo (venta con al menos un producto, no
+    // cancelada) en los ultimos 30 dias. Las notas de saldo heredado
+    // (carga inicial de deuda de antes de usar el sistema) no cuentan --
+    // esas se crean sin ningun VentaItem, no son una compra real, y su
+    // fecha esta puesta a proposito uno o mas dias atras.
+    const ventasReales = c.ventas.filter((v) => !v.cancelada && v._count.items > 0);
+    const ultimaCompra = ventasReales.reduce<Date | null>(
+      (max, v) => (!max || v.fecha > max ? v.fecha : max),
+      null
+    );
+    return {
+      id: c.id,
+      nombre: c.nombre,
+      telefono: c.telefono,
+      direccion: c.direccion,
+      direccionEntrega: c.direccionEntrega,
+      permiteVentaCredito: c.permiteVentaCredito,
+      saldoInicial: Number(c.saldoInicial),
+      saldoTotal: calcularSaldoTotal(c.ventas, c.saldoInicial),
+      ultimaCompra,
+      activo: !!ultimaCompra && ultimaCompra >= limiteActivo,
+    };
+  });
 
   if (filtro === 'conDeuda') return mapeados.filter((c) => c.saldoTotal > 0);
   if (filtro === 'sinDeuda') return mapeados.filter((c) => c.saldoTotal <= 0);
