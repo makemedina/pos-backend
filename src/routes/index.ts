@@ -55,9 +55,11 @@ import {
   registrarPagoMultiNota,
   pagosVenta,
   cancelarPagoVenta,
+  obtenerComprobantePagoPorGrupo,
   MontoPagoInvalidoError,
   PagoYaCanceladoError,
   AutorizacionCancelacionPagoInvalidaError,
+  ComprobantePagoNoEncontradoError,
 } from '../services/cartera.service';
 import multer from 'multer';
 import {
@@ -1529,6 +1531,19 @@ router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistra
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago repartido entre notas' });
+  }
+});
+
+router.get('/cartera/comprobante-pago/:grupoPagoId', requierePermiso('puedeVerCarteraGeneral'), async (req, res) => {
+  try {
+    const comprobante = await obtenerComprobantePagoPorGrupo(req.params.grupoPagoId);
+    res.json(comprobante);
+  } catch (err) {
+    if (err instanceof ComprobantePagoNoEncontradoError) {
+      return res.status(404).json({ error: err.message, code: 'COMPROBANTE_NO_ENCONTRADO' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al reconstruir el comprobante' });
   }
 });
 

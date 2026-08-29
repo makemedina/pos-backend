@@ -351,8 +351,17 @@ model PagoVenta {
   canceladoPor    Usuario?  @relation("CancelaPagoVenta", fields: [canceladoPorId], references: [id])
   autorizadoPorId String?
   autorizadoPor   Usuario?  @relation("AutorizaCancelacionPagoVenta", fields: [autorizadoPorId], references: [id])
+  // Comparten el mismo grupoPagoId todos los PagoVenta creados en UNA
+  // sola accion de "registrar pago" -- ya sea un abono a una sola nota
+  // repartido en varios metodos, o un pago repartido entre varias notas
+  // (o ambos a la vez). Sirve para poder reimprimir despues el
+  // comprobante COMPLETO tal como se genero la primera vez, en vez de
+  // solo la parte de una nota individual.
+  grupoPagoId    String?
 
   asignaciones PagoAsignacion[]
+
+  @@index([grupoPagoId])
 }
 
 // Reparte cada pago parcial entre las lineas de la venta (automatico por default)

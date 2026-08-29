@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
@@ -141,7 +142,68 @@ export async function pagosVenta(ventaId: string) {
     cancelado: p.cancelado,
     canceladoEn: p.canceladoEn,
     registradoPor: { nombre: p.registradoPor?.nombre ?? 'Registro anterior' },
+    grupoPagoId: p.grupoPagoId,
   }));
+}
+
+export class ComprobantePagoNoEncontradoError extends Error {
+  constructor() {
+    super('No se encontro ese pago (puede que se haya cancelado, o sea de antes de que existiera esta funcion).');
+  }
+}
+
+/**
+ * Reconstruye el comprobante COMPLETO de un pago ya registrado, tal como
+ * se genero la primera vez -- ya sea un abono a una sola nota (repartido
+ * en uno o varios metodos) o un pago repartido entre varias notas.
+ * Junta todos los PagoVenta que comparten el mismo grupoPagoId (todos se
+ * crearon juntos, dentro de la misma accion de "registrar pago"), sin
+ * importar si ese grupo termino tocando una nota o varias.
+ */
+export async function obtenerComprobantePagoPorGrupo(grupoPagoId: string) {
+  const pagos = await prisma.pagoVenta.findMany({
+    where: { grupoPagoId, cancelado: false },
+    include: { venta: { include: { cliente: true } } },
+    orderBy: { fecha: 'asc' },
+  });
+
+  if (pagos.length === 0) {
+    throw new ComprobantePagoNoEncontradoError();
+  }
+
+  const cliente = pagos[0].venta.cliente;
+  const totalPagado = pagos.reduce((acc, p) => acc + Number(p.monto), 0);
+  const metodosPago = [...new Set(pagos.map((p) => p.metodoPago))];
+
+  const detallePorNota = new Map<string, { folio: number; monto: number; saldoRestante: number }>();
+  for (const p of pagos) {
+    const previo = detallePorNota.get(p.ventaId);
+    detallePorNota.set(p.ventaId, {
+      folio: p.venta.folio,
+      monto: (previo?.monto ?? 0) + Number(p.monto),
+      // El saldo pendiente ACTUAL de la nota (puede haber cambiado desde
+      // este pago si hubo abonos o cancelaciones despues) -- igual que
+      // el reimprimir de una sola nota ya se comportaba antes.
+      saldoRestante: Number(p.venta.saldoPendiente),
+    });
+  }
+
+  const saldoTotalCliente = await prisma.$transaction((tx) => calcularSaldoTotalCliente(tx, cliente.id));
+
+  return {
+    folioNota: Array.from(detallePorNota.values()).map((d) => d.folio).join(', '),
+    clienteNombre: cliente.nombre,
+    clienteTelefono: cliente.telefono,
+    monto: totalPagado,
+    metodoPago: metodosPago.join(', '),
+    fecha: pagos[0].fecha,
+    saldoNotaRestante: detallePorNota.size === 1 ? Array.from(detallePorNota.values())[0].saldoRestante : 0,
+    saldoTotalCliente,
+    detalleNotas:
+      detallePorNota.size > 1
+        ? Array.from(detallePorNota.values()).map((d) => ({ folio: d.folio, monto: d.monto, saldoRestante: d.saldoRestante }))
+        : undefined,
+  };
 }
 
 /**
@@ -162,7 +224,8 @@ async function aplicarPagoVenta(
   monto: number,
   metodoPago: string,
   registradoPorId: string,
-  clienteIdEsperado?: string
+  clienteIdEsperado?: string,
+  grupoPagoId?: string
 ) {
   if (!monto || monto <= 0) {
     throw new MontoPagoInvalidoError('El monto del pago debe ser mayor a cero');
@@ -203,7 +266,7 @@ async function aplicarPagoVenta(
   const totalRestante = restantePorItem.reduce((acc, i) => acc + i.restante, 0);
 
   const pago = await tx.pagoVenta.create({
-    data: { ventaId, monto, metodoPago, registradoPorId },
+    data: { ventaId, monto, metodoPago, registradoPorId, grupoPagoId },
   });
 
   // Si el cliente paga de mas, el excedente no se reparte entre las
@@ -293,12 +356,14 @@ export async function registrarPagoVenta(
     throw new MontoPagoInvalidoError('Debes capturar un monto mayor a cero');
   }
 
+  const grupoPagoId = randomUUID();
+
   return prisma.$transaction(async (tx) => {
     const pagosCreados = [];
     let clienteId = '';
     let saldoNotaRestante = 0;
     for (const p of pagosValidos) {
-      const resultado = await aplicarPagoVenta(tx, ventaId, p.monto, p.metodoPago, registradoPorId);
+      const resultado = await aplicarPagoVenta(tx, ventaId, p.monto, p.metodoPago, registradoPorId, undefined, grupoPagoId);
       pagosCreados.push(resultado.pago);
       clienteId = resultado.venta.clienteId;
       saldoNotaRestante = resultado.saldoNotaRestante;
@@ -309,6 +374,7 @@ export async function registrarPagoVenta(
       montoTotal: pagosValidos.reduce((acc, p) => acc + p.monto, 0),
       saldoTotalCliente,
       saldoNotaRestante,
+      grupoPagoId,
     };
   });
 }
@@ -353,6 +419,8 @@ export async function registrarPagoMultiNota(
     );
   }
 
+  const grupoPagoId = randomUUID();
+
   return prisma.$transaction(async (tx) => {
     const detallePorNota = new Map<
       string,
@@ -375,7 +443,8 @@ export async function registrarPagoMultiNota(
             monto,
             pago.metodoPago,
             registradoPorId,
-            clienteId
+            clienteId,
+            grupoPagoId
           );
           totalPagado += monto;
           const previo = detallePorNota.get(asignacion.ventaId);
@@ -397,7 +466,7 @@ export async function registrarPagoMultiNota(
 
     const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
 
-    return { detalle: Array.from(detallePorNota.values()), totalPagado, saldoTotalCliente };
+    return { detalle: Array.from(detallePorNota.values()), totalPagado, saldoTotalCliente, grupoPagoId };
   });
 }
 
