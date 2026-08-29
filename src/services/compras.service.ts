@@ -3,6 +3,7 @@ import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente } from './configuracion.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
+import { redondearCentavos } from '../utils/dinero';
 import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
 
 const PREFIJO_FACTURAS = 'facturas-compra/';
@@ -178,7 +179,7 @@ async function aplicarPagoCompra(
     });
   }
 
-  const nuevoSaldo = saldoActual - monto;
+  const nuevoSaldo = redondearCentavos(saldoActual - monto);
 
   const compraActualizada = await tx.compra.update({
     where: { id: compraId },

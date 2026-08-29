@@ -1,12 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
-
-// Copia local a proposito (no importada de ventas.service.ts): ese
-// archivo importa consumirSaldoAFavor de aqui, e importar en la
-// direccion contraria crearia un ciclo entre los dos modulos.
-function redondearCentavos(valor: number): number {
-  return Math.round((valor + Number.EPSILON) * 100) / 100;
-}
+import { redondearCentavos } from '../utils/dinero';
 
 export class SaldoAFavorInsuficienteError extends Error {
   constructor(disponible: number) {

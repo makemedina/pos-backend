@@ -1,6 +1,7 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { consumirSaldoAFavor } from './saldoAFavor.service';
+import { redondearCentavos } from '../utils/dinero';
 
 interface ItemVentaInput {
   varianteId: string;
@@ -51,16 +52,6 @@ export class ClienteSinCreditoError extends Error {
   constructor() {
     super('Este cliente no tiene autorizado comprar a credito.');
   }
-}
-
-// Los montos se acumulan en JS antes de guardarse como Decimal(12,2), y
-// cantidad*precioUnitario con cantidades de 3 decimales puede dejar ruido
-// de punto flotante (ej. 2.345*58 = 136.01000000000002). Prisma redondea
-// al guardar, pero estadoPago se decide ANTES de eso -- si no se redondea
-// aqui tambien, una venta pagada exacta puede quedar marcada 'parcial'
-// aunque el saldo se vea en $0.00 en pantalla.
-function redondearCentavos(valor: number): number {
-  return Math.round((valor + Number.EPSILON) * 100) / 100;
 }
 
 /**

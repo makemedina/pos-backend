@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { consumirSaldoAFavor } from './saldoAFavor.service';
+import { redondearCentavos } from '../utils/dinero';
 
 export class MontoPagoInvalidoError extends Error {}
 
@@ -227,7 +228,7 @@ async function aplicarPagoVenta(
     }
   }
 
-  const nuevoSaldo = saldoActual - monto;
+  const nuevoSaldo = redondearCentavos(saldoActual - monto);
 
   await tx.venta.update({
     where: { id: ventaId },
@@ -451,7 +452,7 @@ export async function cancelarPagoVenta(
 
     await tx.pagoAsignacion.deleteMany({ where: { pagoId } });
 
-    const nuevoSaldo = Math.min(Number(ventaActual.saldoPendiente) + monto, total);
+    const nuevoSaldo = redondearCentavos(Math.min(Number(ventaActual.saldoPendiente) + monto, total));
 
     await tx.venta.update({
       where: { id: pagoActual.ventaId },

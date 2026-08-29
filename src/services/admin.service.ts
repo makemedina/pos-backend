@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { redondearCentavos } from '../utils/dinero';
 
 export class ConfirmacionInvalidaError extends Error {
   constructor() {
@@ -200,4 +201,64 @@ export async function cargarInventarioInicial(filas: FilaInventarioInicial[], fe
 
     return { compraId: compraAncla.id, items: resultado };
   });
+}
+
+function estadoPagoCorrecto(saldoPendiente: number, total: number): string {
+  if (saldoPendiente >= total) return 'pendiente';
+  if (saldoPendiente > 0) return 'parcial';
+  return 'pagada';
+}
+
+/**
+ * Corrige notas/facturas donde el estadoPago guardado no coincide con lo
+ * que su saldoPendiente (redondeado a centavos) dice que deberia ser --
+ * el sintoma es una nota que en pantalla muestra "Saldo: $0.00" pero
+ * nunca dice "Pagada" (se quedo en "parcial" para siempre).
+ *
+ * La causa: antes de este arreglo, algunos calculos de saldoPendiente
+ * (sobre todo abonos parciales encadenados) se guardaban sin redondear a
+ * centavos, dejando residuos de punto flotante como 0.00000000000003 en
+ * vez de exactamente 0 -- invisibles en pantalla (se formatean a "$0.00"),
+ * pero suficientes para que la comparacion "saldoPendiente <= 0" fallara.
+ * Los calculos nuevos ya redondean siempre, pero esto corrige las notas
+ * que quedaron mal ANTES de ese arreglo.
+ */
+export async function corregirEstadosPagoDesincronizados() {
+  const [ventas, compras] = await Promise.all([
+    prisma.venta.findMany({ where: { cancelada: false } }),
+    prisma.compra.findMany({ where: { cancelada: false } }),
+  ]);
+
+  let ventasCorregidas = 0;
+  for (const v of ventas) {
+    const saldoRedondeado = redondearCentavos(Number(v.saldoPendiente));
+    const estadoCorrecto = estadoPagoCorrecto(saldoRedondeado, Number(v.total));
+    if (v.estadoPago !== estadoCorrecto || Number(v.saldoPendiente) !== saldoRedondeado) {
+      await prisma.venta.update({
+        where: { id: v.id },
+        data: { saldoPendiente: saldoRedondeado, estadoPago: estadoCorrecto },
+      });
+      ventasCorregidas++;
+    }
+  }
+
+  let comprasCorregidas = 0;
+  for (const c of compras) {
+    const saldoRedondeado = redondearCentavos(Number(c.saldoPendiente));
+    const estadoCorrecto = estadoPagoCorrecto(saldoRedondeado, Number(c.total));
+    if (c.estadoPago !== estadoCorrecto || Number(c.saldoPendiente) !== saldoRedondeado) {
+      await prisma.compra.update({
+        where: { id: c.id },
+        data: { saldoPendiente: saldoRedondeado, estadoPago: estadoCorrecto },
+      });
+      comprasCorregidas++;
+    }
+  }
+
+  return {
+    ventasRevisadas: ventas.length,
+    ventasCorregidas,
+    comprasRevisadas: compras.length,
+    comprasCorregidas,
+  };
 }

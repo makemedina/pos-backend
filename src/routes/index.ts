@@ -92,6 +92,7 @@ import { requireAuth, requiereAdmin, requierePermiso } from '../middleware/auth'
 import {
   ejecutarReset,
   cargarInventarioInicial,
+  corregirEstadosPagoDesincronizados,
   ConfirmacionInvalidaError,
   DependenciaResetInvalidaError,
   type OpcionesReset,
@@ -216,6 +217,16 @@ router.post('/admin/cargar-facturas-iniciales', requiereAdmin, async (req, res) 
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al cargar las facturas iniciales' });
+  }
+});
+
+router.post('/admin/corregir-estados-pago', requiereAdmin, async (_req, res) => {
+  try {
+    const resultado = await corregirEstadosPagoDesincronizados();
+    res.json(resultado);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al corregir los estados de pago' });
   }
 });
 
