@@ -1281,6 +1281,7 @@ router.post('/clientes', async (req, res) => {
     const {
       nombre,
       telefono,
+      nombreContacto,
       calle,
       colonia,
       ciudad,
@@ -1292,11 +1293,12 @@ router.post('/clientes', async (req, res) => {
       estadoEntrega,
       codigoPostalEntrega,
     } = req.body;
-    const tieneDireccion = calle || colonia || ciudad || estado || codigoPostal;
-    const cliente = tieneDireccion
+    const tieneDatosExtra = calle || colonia || ciudad || estado || codigoPostal || nombreContacto;
+    const cliente = tieneDatosExtra
       ? await crearCliente({
           nombre,
           telefono,
+          nombreContacto,
           calle,
           colonia,
           ciudad,
@@ -1370,6 +1372,7 @@ router.put('/clientes/:id', async (req, res) => {
     const {
       nombre,
       telefono,
+      nombreContacto,
       calle,
       colonia,
       ciudad,
@@ -1384,6 +1387,7 @@ router.put('/clientes/:id', async (req, res) => {
     } = req.body;
     const datos: any = {
       nombre,
+      nombreContacto,
       telefono,
       calle,
       colonia,

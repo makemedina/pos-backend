@@ -205,7 +205,14 @@ model LoteInventario {
 
 model Cliente {
   id                  String   @id @default(uuid())
+  // Nombre del negocio del cliente -- se sigue usando tal cual en todo
+  // el resto del sistema (recibos, cartera, busqueda, listados) como el
+  // nombre principal del cliente.
   nombre              String
+  // Nombre de la persona de contacto en ese negocio (opcional) -- solo
+  // se ve/edita en Datos del cliente, no reemplaza a "nombre" en ningun
+  // otro lado.
+  nombreContacto      String?
   telefono            String
   email               String?
   // Direccion del negocio del cliente, separada en partes (en vez de un
