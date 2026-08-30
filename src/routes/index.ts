@@ -1278,9 +1278,36 @@ router.get('/clientes/todos', async (req, res) => {
 
 router.post('/clientes', async (req, res) => {
   try {
-    const { nombre, telefono, direccion, direccionEntrega } = req.body;
-    const cliente = direccion || direccionEntrega
-      ? await crearCliente({ nombre, telefono, direccion, direccionEntrega })
+    const {
+      nombre,
+      telefono,
+      calle,
+      colonia,
+      ciudad,
+      estado,
+      codigoPostal,
+      calleEntrega,
+      coloniaEntrega,
+      ciudadEntrega,
+      estadoEntrega,
+      codigoPostalEntrega,
+    } = req.body;
+    const tieneDireccion = calle || colonia || ciudad || estado || codigoPostal;
+    const cliente = tieneDireccion
+      ? await crearCliente({
+          nombre,
+          telefono,
+          calle,
+          colonia,
+          ciudad,
+          estado,
+          codigoPostal,
+          calleEntrega,
+          coloniaEntrega,
+          ciudadEntrega,
+          estadoEntrega,
+          codigoPostalEntrega,
+        })
       : await crearClienteRapido(nombre, telefono);
     res.status(201).json(cliente);
   } catch (err) {
@@ -1340,8 +1367,35 @@ router.get('/clientes/:id', async (req, res) => {
 
 router.put('/clientes/:id', async (req, res) => {
   try {
-    const { nombre, telefono, direccion, direccionEntrega, permiteVentaCredito } = req.body;
-    const datos: any = { nombre, telefono, direccion, direccionEntrega };
+    const {
+      nombre,
+      telefono,
+      calle,
+      colonia,
+      ciudad,
+      estado,
+      codigoPostal,
+      calleEntrega,
+      coloniaEntrega,
+      ciudadEntrega,
+      estadoEntrega,
+      codigoPostalEntrega,
+      permiteVentaCredito,
+    } = req.body;
+    const datos: any = {
+      nombre,
+      telefono,
+      calle,
+      colonia,
+      ciudad,
+      estado,
+      codigoPostal,
+      calleEntrega,
+      coloniaEntrega,
+      ciudadEntrega,
+      estadoEntrega,
+      codigoPostalEntrega,
+    };
     // El switch de credito solo lo puede cambiar un administrador, sin
     // importar lo que venga en el body si quien llama no lo es.
     if (permiteVentaCredito !== undefined && req.usuario!.rolBase === 'administrador') {

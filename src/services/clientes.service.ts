@@ -34,19 +34,35 @@ export async function crearClienteRapido(nombre: string, telefono: string) {
   });
 }
 
-/** Alta completa desde la pantalla de Clientes (con domicilio opcional). */
-export async function crearCliente(datos: {
-  nombre: string;
-  telefono: string;
-  direccion?: string;
-  direccionEntrega?: string;
-}) {
+interface DireccionInput {
+  calle?: string;
+  colonia?: string;
+  ciudad?: string;
+  estado?: string;
+  codigoPostal?: string;
+  calleEntrega?: string;
+  coloniaEntrega?: string;
+  ciudadEntrega?: string;
+  estadoEntrega?: string;
+  codigoPostalEntrega?: string;
+}
+
+/** Alta completa desde la pantalla de Clientes (con domicilio opcional, separado por partes). */
+export async function crearCliente(datos: { nombre: string; telefono: string } & DireccionInput) {
   return prisma.cliente.create({
     data: {
       nombre: datos.nombre,
       telefono: datos.telefono,
-      direccion: datos.direccion || undefined,
-      direccionEntrega: datos.direccionEntrega || undefined,
+      calle: datos.calle || undefined,
+      colonia: datos.colonia || undefined,
+      ciudad: datos.ciudad || undefined,
+      estado: datos.estado || undefined,
+      codigoPostal: datos.codigoPostal || undefined,
+      calleEntrega: datos.calleEntrega || undefined,
+      coloniaEntrega: datos.coloniaEntrega || undefined,
+      ciudadEntrega: datos.ciudadEntrega || undefined,
+      estadoEntrega: datos.estadoEntrega || undefined,
+      codigoPostalEntrega: datos.codigoPostalEntrega || undefined,
     },
   });
 }
@@ -213,8 +229,16 @@ export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sin
       id: c.id,
       nombre: c.nombre,
       telefono: c.telefono,
-      direccion: c.direccion,
-      direccionEntrega: c.direccionEntrega,
+      calle: c.calle,
+      colonia: c.colonia,
+      ciudad: c.ciudad,
+      estado: c.estado,
+      codigoPostal: c.codigoPostal,
+      calleEntrega: c.calleEntrega,
+      coloniaEntrega: c.coloniaEntrega,
+      ciudadEntrega: c.ciudadEntrega,
+      estadoEntrega: c.estadoEntrega,
+      codigoPostalEntrega: c.codigoPostalEntrega,
       permiteVentaCredito: c.permiteVentaCredito,
       saldoInicial: Number(c.saldoInicial),
       saldoTotal: calcularSaldoTotal(c.ventas, c.saldoInicial),
@@ -238,8 +262,16 @@ export async function obtenerClienteDetalle(clienteId: string) {
     id: cliente.id,
     nombre: cliente.nombre,
     telefono: cliente.telefono,
-    direccion: cliente.direccion,
-    direccionEntrega: cliente.direccionEntrega,
+    calle: cliente.calle,
+    colonia: cliente.colonia,
+    ciudad: cliente.ciudad,
+    estado: cliente.estado,
+    codigoPostal: cliente.codigoPostal,
+    calleEntrega: cliente.calleEntrega,
+    coloniaEntrega: cliente.coloniaEntrega,
+    ciudadEntrega: cliente.ciudadEntrega,
+    estadoEntrega: cliente.estadoEntrega,
+    codigoPostalEntrega: cliente.codigoPostalEntrega,
     permiteVentaCredito: cliente.permiteVentaCredito,
     saldoInicial: Number(cliente.saldoInicial),
     saldoTotal: calcularSaldoTotal(cliente.ventas, cliente.saldoInicial),
@@ -247,11 +279,9 @@ export async function obtenerClienteDetalle(clienteId: string) {
   };
 }
 
-interface ActualizarClienteInput {
+interface ActualizarClienteInput extends DireccionInput {
   nombre?: string;
   telefono?: string;
-  direccion?: string;
-  direccionEntrega?: string;
   permiteVentaCredito?: boolean;
 }
 

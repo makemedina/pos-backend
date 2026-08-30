@@ -208,12 +208,22 @@ model Cliente {
   nombre              String
   telefono            String
   email               String?
-  // Direccion del negocio del cliente. Algunos clientes reciben la
-  // mercancia en un lugar distinto (ej. una bodega) -- direccionEntrega
-  // es opcional; cuando esta vacia, se asume que reciben en esta misma
+  // Direccion del negocio del cliente, separada en partes (en vez de un
+  // solo texto libre) para poder usarlas individualmente despues (ej.
+  // filtrar por ciudad). Algunos clientes reciben la mercancia en un
+  // lugar distinto (ej. una bodega) -- los campos "...Entrega" son
+  // opcionales; cuando estan vacios, se asume que reciben en esta misma
   // direccion.
-  direccion           String?
-  direccionEntrega    String?
+  calle                String?
+  colonia              String?
+  ciudad               String?
+  estado               String?
+  codigoPostal         String?
+  calleEntrega         String?
+  coloniaEntrega       String?
+  ciudadEntrega        String?
+  estadoEntrega        String?
+  codigoPostalEntrega  String?
   notas               String?
   permiteVentaCredito Boolean  @default(true)
   // Saldo que el cliente ya debia ANTES de usar el sistema (cartera
