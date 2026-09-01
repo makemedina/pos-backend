@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
@@ -130,7 +131,8 @@ async function aplicarPagoCompra(
   monto: number,
   metodoPago: string,
   registradoPorId: string,
-  proveedorIdEsperado?: string
+  proveedorIdEsperado?: string,
+  grupoPagoId?: string
 ) {
   if (!monto || monto <= 0) {
     throw new MontoPagoCompraInvalidoError('El monto del pago debe ser mayor a cero');
@@ -162,7 +164,7 @@ async function aplicarPagoCompra(
   }
 
   await tx.pagoCompra.create({
-    data: { compraId, monto, metodoPago, registradoPorId },
+    data: { compraId, monto, metodoPago, registradoPorId, grupoPagoId },
   });
 
   if (metodoPago === 'transferencia') {
@@ -203,8 +205,9 @@ export async function registrarPagoCompra(
   metodoPago: string,
   registradoPorId: string
 ) {
+  const grupoPagoId = randomUUID();
   return prisma.$transaction(async (tx) => {
-    const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId);
+    const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId, undefined, grupoPagoId);
     return compra;
   });
 }
@@ -231,6 +234,8 @@ export async function registrarPagoMultiCompra(
     throw new MontoPagoCompraInvalidoError('Debes asignar un monto mayor a cero a al menos una factura');
   }
 
+  const grupoPagoId = randomUUID();
+
   return prisma.$transaction(async (tx) => {
     const detalle: { compraId: string; numeroFactura: string | null; monto: number; saldoFacturaRestante: number }[] = [];
     let totalPagado = 0;
@@ -242,7 +247,8 @@ export async function registrarPagoMultiCompra(
         asignacion.monto,
         metodoPago,
         registradoPorId,
-        proveedorId
+        proveedorId,
+        grupoPagoId
       );
       totalPagado += asignacion.monto;
       detalle.push({
@@ -341,17 +347,21 @@ export async function cancelarPagoCompra(
       },
     });
 
+    // A diferencia de un pago de cliente (donde el dinero entra y cancelar
+    // resta), aqui el pago original SALIO de caja/banco (decrement en
+    // aplicarPagoCompra) -- cancelarlo debe DEVOLVER ese dinero, no
+    // restarlo de nuevo.
     if (pagoActual.metodoPago === 'transferencia') {
       await tx.configuracion.upsert({
         where: { id: 'singleton' },
-        update: { saldoBancoActual: { decrement: monto } },
-        create: { id: 'singleton', saldoBancoActual: -monto },
+        update: { saldoBancoActual: { increment: monto } },
+        create: { id: 'singleton', saldoBancoActual: monto },
       });
     } else if (pagoActual.metodoPago === 'efectivo') {
       await tx.configuracion.upsert({
         where: { id: 'singleton' },
-        update: { saldoEfectivoActual: { decrement: monto } },
-        create: { id: 'singleton', saldoEfectivoActual: -monto },
+        update: { saldoEfectivoActual: { increment: monto } },
+        create: { id: 'singleton', saldoEfectivoActual: monto },
       });
     }
 
@@ -364,6 +374,157 @@ export async function cancelarPagoCompra(
         autorizadoPorId,
       },
     });
+  });
+}
+
+/**
+ * Todos los pagos que se le han entregado a un proveedor, sin importar a
+ * que factura(s) hayan cubierto -- agrupados por grupoPagoId (un solo
+ * pago puede repartirse entre varias facturas pendientes del proveedor,
+ * y todos esos PagoCompra comparten el mismo grupoPagoId). Los pagos de
+ * antes de que existiera este agrupamiento no tienen grupoPagoId -- cada
+ * uno de esos forma su propio grupo de una sola factura, usando su propio
+ * id como clave. Mismo patron que pagosClienteAgrupados() en cartera.service.ts.
+ */
+export async function pagosProveedorAgrupados(proveedorId: string) {
+  const pagos = await prisma.pagoCompra.findMany({
+    where: { compra: { proveedorId } },
+    include: { compra: { select: { id: true, numeroFactura: true } }, registradoPor: true },
+    orderBy: { fecha: 'desc' },
+  });
+
+  const grupos = new Map<
+    string,
+    {
+      grupoKey: string;
+      fecha: Date;
+      metodosPago: Set<string>;
+      montoTotal: number;
+      facturas: { compraId: string; numeroFactura: string | null; monto: number; cancelado: boolean }[];
+      registradoPor: string;
+      todoCancelado: boolean;
+    }
+  >();
+
+  for (const p of pagos) {
+    const grupoKey = p.grupoPagoId ?? p.id;
+    let grupo = grupos.get(grupoKey);
+    if (!grupo) {
+      grupo = {
+        grupoKey,
+        fecha: p.fecha,
+        metodosPago: new Set(),
+        montoTotal: 0,
+        facturas: [],
+        registradoPor: p.registradoPor?.nombre ?? 'Registro anterior',
+        todoCancelado: true,
+      };
+      grupos.set(grupoKey, grupo);
+    }
+    if (p.fecha < grupo.fecha) grupo.fecha = p.fecha;
+    if (!p.cancelado) {
+      grupo.metodosPago.add(p.metodoPago);
+      grupo.montoTotal += Number(p.monto);
+      grupo.todoCancelado = false;
+    }
+    grupo.facturas.push({
+      compraId: p.compra.id,
+      numeroFactura: p.compra.numeroFactura,
+      monto: Number(p.monto),
+      cancelado: p.cancelado,
+    });
+  }
+
+  return Array.from(grupos.values())
+    .map((g) => ({
+      grupoKey: g.grupoKey,
+      fecha: g.fecha,
+      metodosPago: Array.from(g.metodosPago),
+      montoTotal: redondearCentavos(g.montoTotal),
+      facturas: g.facturas,
+      registradoPor: g.registradoPor,
+      cancelado: g.todoCancelado,
+    }))
+    .sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+}
+
+/**
+ * Cancela TODOS los PagoCompra de un mismo grupoPagoId de un solo golpe
+ * -- el equivalente a cancelarPagoCompra pero para un pago que se le
+ * entrego a un proveedor y que se repartio entre varias facturas, en vez
+ * de tener que entrar factura por factura y cancelar cada renglon.
+ * Revierte cada factura afectada (saldoPendiente, estadoPago) y el
+ * efectivo/banco que cada renglon habia movido, todo en una transaccion.
+ *
+ * grupoKey puede ser un grupoPagoId real (varios renglones) o, para pagos
+ * de antes de que existiera el agrupamiento, el id de un PagoCompra suelto
+ * sin grupoPagoId -- pagosProveedorAgrupados() ya arma la clave de la
+ * misma forma, asi que el frontend nunca necesita distinguir los dos casos.
+ *
+ * Si CUALQUIERA de los renglones no es de hoy, cancelar el grupo entero
+ * requiere autorizacion por telefono+PIN de un administrador.
+ */
+export async function cancelarGrupoPagoCompra(
+  grupoKey: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const pagos = await prisma.pagoCompra.findMany({
+    where: { OR: [{ grupoPagoId: grupoKey }, { id: grupoKey, grupoPagoId: null }] },
+    include: { compra: true },
+  });
+
+  const pagosActivos = pagos.filter((p) => !p.cancelado);
+  if (pagosActivos.length === 0) {
+    throw new PagoCompraYaCanceladoError();
+  }
+
+  let autorizadoPorId: string | null = null;
+  if (pagosActivos.some((p) => !esMismoDia(p.fecha, new Date()))) {
+    if (!autorizacion) throw new AutorizacionCancelacionPagoCompraInvalidaError();
+    autorizadoPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadoPorId) throw new AutorizacionCancelacionPagoCompraInvalidaError();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    for (const pagoActual of pagosActivos) {
+      const monto = Number(pagoActual.monto);
+      const total = Number(pagoActual.compra.total);
+
+      await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
+      const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
+
+      const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + monto, total));
+
+      await tx.compra.update({
+        where: { id: pagoActual.compraId },
+        data: {
+          saldoPendiente: nuevoSaldo,
+          estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
+        },
+      });
+
+      if (pagoActual.metodoPago === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { increment: monto } },
+          create: { id: 'singleton', saldoBancoActual: monto },
+        });
+      } else if (pagoActual.metodoPago === 'efectivo') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoEfectivoActual: { increment: monto } },
+          create: { id: 'singleton', saldoEfectivoActual: monto },
+        });
+      }
+
+      await tx.pagoCompra.update({
+        where: { id: pagoActual.id },
+        data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
+      });
+    }
+
+    return { cancelados: pagosActivos.length };
   });
 }
 

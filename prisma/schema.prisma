@@ -190,6 +190,14 @@ model PagoCompra {
   canceladoPor    Usuario?  @relation("CancelaPagoCompra", fields: [canceladoPorId], references: [id])
   autorizadoPorId String?
   autorizadoPor   Usuario?  @relation("AutorizaCancelacionPagoCompra", fields: [autorizadoPorId], references: [id])
+
+  // Comparten el mismo grupoPagoId todos los PagoCompra creados en UNA
+  // sola accion de "registrar pago" -- un pago que el usuario entrega a un
+  // proveedor puede repartirse entre varias facturas a la vez. Permite
+  // cancelar TODAS esas facturas de un solo golpe (cancelarGrupoPagoCompra).
+  grupoPagoId     String?
+
+  @@index([grupoPagoId])
 }
 
 // ---------- INVENTARIO POR LOTES (costeo FIFO) ----------
