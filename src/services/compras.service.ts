@@ -270,8 +270,101 @@ export async function pagosCompra(compraId: string) {
     monto: Number(p.monto),
     metodoPago: p.metodoPago,
     fecha: p.fecha,
+    cancelado: p.cancelado,
+    canceladoEn: p.canceladoEn,
     registradoPor: { nombre: p.registradoPor?.nombre ?? 'Registro anterior' },
   }));
+}
+
+export class PagoCompraYaCanceladoError extends Error {
+  constructor() {
+    super('Este pago ya estaba cancelado.');
+  }
+}
+
+export class AutorizacionCancelacionPagoCompraInvalidaError extends Error {
+  constructor() {
+    super('Cancelar un pago de un dia anterior necesita autorizacion por telefono y PIN.');
+  }
+}
+
+/**
+ * Cancela un abono ya registrado a una factura de proveedor (por
+ * ejemplo, si se capturo con el metodo de pago equivocado -- efectivo en
+ * vez de transferencia). No se borra -- queda marcado como cancelado,
+ * para poder auditar despues. Revierte lo que ese pago habia movido: sube
+ * de nuevo el saldoPendiente de la compra, recalcula su estadoPago, y
+ * baja el saldo de efectivo/banco que se le habia sumado -- para volver
+ * a registrarlo despues con el metodo correcto.
+ *
+ * Si el pago es de un dia distinto al de hoy, cancelarlo requiere
+ * autorizacion por telefono+PIN de un administrador, igual que con
+ * ventas, compras, gastos y depositos.
+ */
+export async function cancelarPagoCompra(
+  pagoId: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const pagoActual = await prisma.pagoCompra.findUniqueOrThrow({
+    where: { id: pagoId },
+    include: { compra: true },
+  });
+
+  if (pagoActual.cancelado) {
+    throw new PagoCompraYaCanceladoError();
+  }
+
+  let autorizadoPorId: string | null = null;
+  if (!esMismoDia(pagoActual.fecha, new Date())) {
+    if (!autorizacion) throw new AutorizacionCancelacionPagoCompraInvalidaError();
+    autorizadoPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadoPorId) throw new AutorizacionCancelacionPagoCompraInvalidaError();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const monto = Number(pagoActual.monto);
+    const total = Number(pagoActual.compra.total);
+
+    // Mismo candado que aplicarPagoCompra: bloquea la fila y vuelve a leer
+    // el saldoPendiente YA DENTRO de la transaccion.
+    await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
+    const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
+
+    const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + monto, total));
+
+    await tx.compra.update({
+      where: { id: pagoActual.compraId },
+      data: {
+        saldoPendiente: nuevoSaldo,
+        estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
+      },
+    });
+
+    if (pagoActual.metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { decrement: monto } },
+        create: { id: 'singleton', saldoBancoActual: -monto },
+      });
+    } else if (pagoActual.metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { decrement: monto } },
+        create: { id: 'singleton', saldoEfectivoActual: -monto },
+      });
+    }
+
+    return tx.pagoCompra.update({
+      where: { id: pagoId },
+      data: {
+        cancelado: true,
+        canceladoEn: new Date(),
+        canceladoPorId: solicitadoPorId,
+        autorizadoPorId,
+      },
+    });
+  });
 }
 
 /** Detalle completo de una compra especifica -- para cuando se hace click en una "entrada" del historial de un producto. */

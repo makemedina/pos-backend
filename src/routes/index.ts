@@ -12,7 +12,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
@@ -1101,6 +1101,27 @@ router.get('/compras/:id/pagos', requierePermiso('puedeVerCarteraGeneral'), asyn
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al consultar los pagos de la compra' });
+  }
+});
+
+router.post('/compras/:compraId/pagos/:pagoId/cancelar', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+  try {
+    const { telefono, pin } = req.body || {};
+    const pago = await cancelarPagoCompra(
+      req.params.pagoId,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
+    res.json(pago);
+  } catch (err) {
+    if (err instanceof PagoCompraYaCanceladoError) {
+      return res.status(409).json({ error: err.message, code: 'PAGO_YA_CANCELADO' });
+    }
+    if (err instanceof AutorizacionCancelacionPagoCompraInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar el pago' });
   }
 });
 
