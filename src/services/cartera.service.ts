@@ -146,6 +146,164 @@ export async function pagosVenta(ventaId: string) {
   }));
 }
 
+/**
+ * Todos los pagos que un cliente ha hecho, sin importar a que nota(s)
+ * hayan cubierto -- agrupados por grupoPagoId (un solo pago que el
+ * cliente entrego puede haberse repartido entre varias notas y/o varios
+ * metodos de pago, y todos esos PagoVenta comparten el mismo
+ * grupoPagoId). Los pagos de antes de que existiera este agrupamiento no
+ * tienen grupoPagoId -- cada uno de esos forma su propio grupo de una
+ * sola nota, usando su propio id como clave.
+ */
+export async function pagosClienteAgrupados(clienteId: string) {
+  const pagos = await prisma.pagoVenta.findMany({
+    where: { venta: { clienteId } },
+    include: { venta: { select: { id: true, folio: true } }, registradoPor: true },
+    orderBy: { fecha: 'desc' },
+  });
+
+  const grupos = new Map<
+    string,
+    {
+      grupoKey: string;
+      fecha: Date;
+      metodosPago: Set<string>;
+      montoTotal: number;
+      notas: { ventaId: string; folio: number; monto: number; cancelado: boolean }[];
+      registradoPor: string;
+      todoCancelado: boolean;
+    }
+  >();
+
+  for (const p of pagos) {
+    const grupoKey = p.grupoPagoId ?? p.id;
+    let grupo = grupos.get(grupoKey);
+    if (!grupo) {
+      grupo = {
+        grupoKey,
+        fecha: p.fecha,
+        metodosPago: new Set(),
+        montoTotal: 0,
+        notas: [],
+        registradoPor: p.registradoPor?.nombre ?? 'Registro anterior',
+        todoCancelado: true,
+      };
+      grupos.set(grupoKey, grupo);
+    }
+    if (p.fecha < grupo.fecha) grupo.fecha = p.fecha;
+    if (!p.cancelado) {
+      grupo.metodosPago.add(p.metodoPago);
+      grupo.montoTotal += Number(p.monto);
+      grupo.todoCancelado = false;
+    }
+    grupo.notas.push({
+      ventaId: p.venta.id,
+      folio: p.venta.folio,
+      monto: Number(p.monto),
+      cancelado: p.cancelado,
+    });
+  }
+
+  return Array.from(grupos.values())
+    .map((g) => ({
+      grupoKey: g.grupoKey,
+      fecha: g.fecha,
+      metodosPago: Array.from(g.metodosPago),
+      montoTotal: redondearCentavos(g.montoTotal),
+      notas: g.notas,
+      registradoPor: g.registradoPor,
+      cancelado: g.todoCancelado,
+    }))
+    .sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
+}
+
+/**
+ * Cancela TODOS los PagoVenta de un mismo grupoPagoId de un solo golpe --
+ * el equivalente a cancelarPagoVenta pero para un pago que el cliente
+ * entrego y que se repartio entre varias notas (o varios metodos), en vez
+ * de tener que entrar nota por nota y cancelar cada renglon. Revierte
+ * cada nota afectada (saldoPendiente, estadoPago) y el efectivo/banco que
+ * cada renglon habia movido, todo en una sola transaccion.
+ *
+ * grupoKey puede ser un grupoPagoId real (varios renglones) o, para
+ * pagos de antes de que existiera el agrupamiento, el id de un PagoVenta
+ * suelto sin grupoPagoId -- pagosClienteAgrupados() ya arma la clave de
+ * la misma forma, asi que el frontend nunca necesita distinguir los dos
+ * casos.
+ *
+ * Si CUALQUIERA de los renglones no es de hoy, cancelar el grupo entero
+ * requiere autorizacion por telefono+PIN de un administrador.
+ */
+export async function cancelarGrupoPago(
+  grupoKey: string,
+  solicitadoPorId: string,
+  autorizacion?: { telefono: string; pin: string }
+) {
+  const pagos = await prisma.pagoVenta.findMany({
+    where: { OR: [{ grupoPagoId: grupoKey }, { id: grupoKey, grupoPagoId: null }] },
+    include: { venta: true },
+  });
+
+  const pagosActivos = pagos.filter((p) => !p.cancelado);
+  if (pagosActivos.length === 0) {
+    throw new PagoYaCanceladoError();
+  }
+
+  let autorizadoPorId: string | null = null;
+  if (pagosActivos.some((p) => !esMismoDia(p.fecha, new Date()))) {
+    if (!autorizacion) throw new AutorizacionCancelacionPagoInvalidaError();
+    autorizadoPorId = await verificarAutorizadorPorTelefono(autorizacion.telefono, autorizacion.pin);
+    if (!autorizadoPorId) throw new AutorizacionCancelacionPagoInvalidaError();
+  }
+
+  return prisma.$transaction(async (tx) => {
+    let clienteId = '';
+
+    for (const pagoActual of pagosActivos) {
+      const monto = Number(pagoActual.monto);
+      const total = Number(pagoActual.venta.total);
+
+      await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${pagoActual.ventaId} FOR UPDATE`;
+      const ventaActual = await tx.venta.findUniqueOrThrow({ where: { id: pagoActual.ventaId } });
+      clienteId = ventaActual.clienteId;
+
+      await tx.pagoAsignacion.deleteMany({ where: { pagoId: pagoActual.id } });
+
+      const nuevoSaldo = redondearCentavos(Math.min(Number(ventaActual.saldoPendiente) + monto, total));
+
+      await tx.venta.update({
+        where: { id: pagoActual.ventaId },
+        data: {
+          saldoPendiente: nuevoSaldo,
+          estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
+        },
+      });
+
+      if (pagoActual.metodoPago === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { decrement: monto } },
+          create: { id: 'singleton', saldoBancoActual: -monto },
+        });
+      } else if (pagoActual.metodoPago === 'efectivo') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoEfectivoActual: { decrement: monto } },
+          create: { id: 'singleton', saldoEfectivoActual: -monto },
+        });
+      }
+
+      await tx.pagoVenta.update({
+        where: { id: pagoActual.id },
+        data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
+      });
+    }
+
+    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
+    return { cancelados: pagosActivos.length, saldoTotalCliente };
+  });
+}
+
 export class ComprobantePagoNoEncontradoError extends Error {
   constructor() {
     super('No se encontro ese pago (puede que se haya cancelado, o sea de antes de que existiera esta funcion).');

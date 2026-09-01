@@ -55,6 +55,8 @@ import {
   registrarPagoMultiNota,
   pagosVenta,
   cancelarPagoVenta,
+  pagosClienteAgrupados,
+  cancelarGrupoPago,
   obtenerComprobantePagoPorGrupo,
   MontoPagoInvalidoError,
   PagoYaCanceladoError,
@@ -1623,6 +1625,37 @@ router.get('/cartera/comprobante-pago/:grupoPagoId', requierePermiso('puedeVerCa
     }
     console.error(err);
     res.status(500).json({ error: 'Error al reconstruir el comprobante' });
+  }
+});
+
+router.get('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeVerCarteraGeneral'), async (req, res) => {
+  try {
+    const grupos = await pagosClienteAgrupados(req.params.clienteId);
+    res.json(grupos);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar los pagos del cliente' });
+  }
+});
+
+router.post('/cartera/grupos-pago/:grupoKey/cancelar', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
+  try {
+    const { telefono, pin } = req.body || {};
+    const resultado = await cancelarGrupoPago(
+      req.params.grupoKey,
+      req.usuario!.id,
+      telefono && pin ? { telefono, pin } : undefined
+    );
+    res.json(resultado);
+  } catch (err) {
+    if (err instanceof PagoYaCanceladoError) {
+      return res.status(409).json({ error: err.message, code: 'PAGO_YA_CANCELADO' });
+    }
+    if (err instanceof AutorizacionCancelacionPagoInvalidaError) {
+      return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al cancelar el pago' });
   }
 });
 
