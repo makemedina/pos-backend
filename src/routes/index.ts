@@ -1,6 +1,6 @@
 import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante, actualizarProducto, NombreProductoInvalidoError, NombreProductoDuplicadoError } from '../services/catalogo.service';
 import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor, eliminarProveedor, ProveedorConInformacionLigadaError } from '../services/proveedores.service';
-import { listarCostosProveedor, guardarCostoProveedor, eliminarCostoProveedor } from '../services/costosProveedor.service';
+import { listarCostosProveedor, guardarCostoProveedor, eliminarCostoProveedor, ultimoCostoCompra } from '../services/costosProveedor.service';
 import { Router } from 'express';
 import {
   crearVenta,
@@ -743,6 +743,16 @@ router.get('/proveedores/:id/costos', requierePermiso('puedeVerCostos'), async (
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al listar los costos del proveedor' });
+  }
+});
+
+router.get('/proveedores/:id/costos/:varianteId/ultima-compra', requierePermiso('puedeVerCostos'), async (req, res) => {
+  try {
+    const ultimo = await ultimoCostoCompra(req.params.id, req.params.varianteId);
+    res.json(ultimo);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar el ultimo costo de compra' });
   }
 });
 

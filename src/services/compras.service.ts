@@ -81,6 +81,16 @@ export async function crearCompra(input: CrearCompraInput) {
           cantidadDisponible: item.cantidad,
         },
       });
+
+      // Mantiene el costo de referencia de este proveedor (seccion
+      // "Costos" en Proveedores) al dia solo con comprar -- sin esto,
+      // quedaba desactualizado hasta que alguien entrara a esa pantalla
+      // a capturarlo a mano.
+      await tx.costoProveedorProducto.upsert({
+        where: { proveedorId_varianteId: { proveedorId: input.proveedorId, varianteId: item.varianteId } },
+        update: { costo: item.costoUnitario },
+        create: { proveedorId: input.proveedorId, varianteId: item.varianteId, costo: item.costoUnitario },
+      });
     }
 
     // Si hubo pago inicial, se registra como el primer abono

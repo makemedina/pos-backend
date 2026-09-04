@@ -43,3 +43,21 @@ export async function eliminarCostoProveedor(proveedorId: string, varianteId: st
     where: { proveedorId_varianteId: { proveedorId, varianteId } },
   });
 }
+
+/**
+ * El costo con el que se compro por ultima vez esta variante a este
+ * proveedor (segun el historial real de Compras/LoteInventario) -- para
+ * sugerirlo como punto de partida al agregar/actualizar su costo de
+ * referencia, en vez de que el usuario tenga que acordarse o buscarlo por
+ * separado en el historial de compras.
+ */
+export async function ultimoCostoCompra(proveedorId: string, varianteId: string) {
+  const lote = await prisma.loteInventario.findFirst({
+    where: { varianteId, compra: { proveedorId, cancelada: false } },
+    orderBy: { compra: { fecha: 'desc' } },
+    select: { costoUnitario: true, compra: { select: { fecha: true } } },
+  });
+
+  if (!lote) return null;
+  return { costo: Number(lote.costoUnitario), fecha: lote.compra.fecha };
+}
