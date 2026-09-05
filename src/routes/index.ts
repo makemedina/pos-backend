@@ -16,19 +16,7 @@ import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPen
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
-import {
-  corteDelDia,
-  guardarEfectivoCorte,
-  guardarBancoCorte,
-  conciliarCorte,
-  listarCortes,
-  actualizarCorteCaja,
-  eliminarCorteCaja,
-  CorteYaExisteError,
-  CorteYaCerradoError,
-  CorteNoExisteError,
-  CorteFaltaBancoError,
-} from '../services/corte.service';
+import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 import {
   buscarClientes,
@@ -1264,25 +1252,22 @@ router.get('/corte', async (req, res) => {
   }
 });
 
-// Elegir una fecha distinta a "hoy" es para casos especiales (como
-// capturar el punto de partida de ayer al arrancar el sistema) -- solo
-// el administrador puede hacerlo, en cualquiera de los 3 pasos.
-function verificarFechaCorte(req: any, res: any, fecha?: string): boolean {
-  if (fecha && req.usuario!.rolBase !== 'administrador') {
-    res.status(403).json({ error: 'Solo un administrador puede capturar un corte con otra fecha.' });
-    return false;
-  }
-  return true;
-}
-
-router.post('/corte/caja/efectivo', async (req, res) => {
+router.post('/corte/caja', async (req, res) => {
   try {
-    const { efectivoContado, fecha, observacion } = req.body;
-    if (!verificarFechaCorte(req, res, fecha)) return;
+    const { efectivoContado, saldoBancoContado, fecha, observacion } = req.body;
 
-    const corte = await guardarEfectivoCorte(
+    // Elegir una fecha distinta a "hoy" es para casos especiales (como
+    // capturar el punto de partida de ayer al arrancar el sistema) --
+    // solo el administrador puede hacerlo.
+    if (fecha && req.usuario!.rolBase !== 'administrador') {
+      return res.status(403).json({ error: 'Solo un administrador puede capturar un corte con otra fecha.' });
+    }
+
+    // registradoPorId ya no viene del body: siempre es quien esta logueado.
+    const corte = await guardarCorteCaja(
       req.usuario!.id,
       Number(efectivoContado),
+      Number(saldoBancoContado),
       fecha ? fechaLocalDesdeString(fecha) : undefined,
       observacion
     );
@@ -1291,56 +1276,8 @@ router.post('/corte/caja/efectivo', async (req, res) => {
     if (err instanceof CorteYaExisteError) {
       return res.status(409).json({ error: err.message, code: 'CORTE_YA_EXISTE' });
     }
-    if (err instanceof CorteYaCerradoError) {
-      return res.status(409).json({ error: err.message, code: 'CORTE_YA_CERRADO' });
-    }
     console.error(err);
-    res.status(500).json({ error: 'Error al guardar el efectivo del corte' });
-  }
-});
-
-router.post('/corte/caja/banco', async (req, res) => {
-  try {
-    const { saldoBancoContado, fecha, observacion } = req.body;
-    if (!verificarFechaCorte(req, res, fecha)) return;
-
-    const corte = await guardarBancoCorte(
-      Number(saldoBancoContado),
-      fecha ? fechaLocalDesdeString(fecha) : undefined,
-      observacion
-    );
-    res.status(200).json(corte);
-  } catch (err) {
-    if (err instanceof CorteNoExisteError) {
-      return res.status(409).json({ error: err.message, code: 'CORTE_NO_EXISTE' });
-    }
-    if (err instanceof CorteYaCerradoError) {
-      return res.status(409).json({ error: err.message, code: 'CORTE_YA_CERRADO' });
-    }
-    console.error(err);
-    res.status(500).json({ error: 'Error al guardar el banco del corte' });
-  }
-});
-
-router.post('/corte/caja/conciliar', async (req, res) => {
-  try {
-    const { fecha } = req.body || {};
-    if (!verificarFechaCorte(req, res, fecha)) return;
-
-    const corte = await conciliarCorte(fecha ? fechaLocalDesdeString(fecha) : undefined);
-    res.status(200).json(corte);
-  } catch (err) {
-    if (err instanceof CorteNoExisteError) {
-      return res.status(409).json({ error: err.message, code: 'CORTE_NO_EXISTE' });
-    }
-    if (err instanceof CorteFaltaBancoError) {
-      return res.status(409).json({ error: err.message, code: 'CORTE_FALTA_BANCO' });
-    }
-    if (err instanceof CorteYaCerradoError) {
-      return res.status(409).json({ error: err.message, code: 'CORTE_YA_CERRADO' });
-    }
-    console.error(err);
-    res.status(500).json({ error: 'Error al conciliar el corte' });
+    res.status(500).json({ error: 'Error al guardar el corte de caja' });
   }
 });
 

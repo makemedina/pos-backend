@@ -7,36 +7,6 @@ export class CorteYaExisteError extends Error {
   }
 }
 
-export class CorteYaCerradoError extends Error {
-  constructor() {
-    super('Este corte ya se concilió. Para corregirlo, edítalo desde el histórico.');
-  }
-}
-
-export class CorteNoExisteError extends Error {
-  constructor() {
-    super('Todavía no se ha capturado el efectivo de este corte.');
-  }
-}
-
-export class CorteFaltaBancoError extends Error {
-  constructor() {
-    super('Todavía falta capturar el saldo en banco antes de conciliar.');
-  }
-}
-
-/**
- * En que paso va un corte: el corte ahora se captura en 3 pasos
- * secuenciales (efectivo -> banco -> conciliar), en vez de todo de un
- * golpe. saldoBancoContado nulo = todavia falta el paso 2; balanzaTotal
- * nulo (con banco ya capturado) = falta el paso 3.
- */
-function estadoDeCorte(c: { saldoBancoContado: unknown; balanzaTotal: unknown }): 'efectivo' | 'banco' | 'conciliado' {
-  if (c.saldoBancoContado === null || c.saldoBancoContado === undefined) return 'efectivo';
-  if (c.balanzaTotal === null || c.balanzaTotal === undefined) return 'banco';
-  return 'conciliado';
-}
-
 function normalizarFecha(fecha: Date) {
   const f = new Date(fecha);
   f.setHours(0, 0, 0, 0);
@@ -290,15 +260,7 @@ export async function corteDelDia(
     utilidadYGastosDelDia(inicioDia, fin),
     prisma.corteCaja.findUnique({ where: { fecha: inicioDia } }),
     valorInventarioActual(),
-    // Solo cuenta como "corte anterior" uno YA CONCILIADO -- si el ultimo
-    // corte se quedo a medias (nunca se llego al paso de conciliar), su
-    // balanzaTotal es nulo y no sirve como punto de partida para la cadena
-    // balanzaAyer + utilidad - gastos; se busca mas atras hasta encontrar
-    // uno completo, o null si no hay ninguno.
-    prisma.corteCaja.findFirst({
-      where: { fecha: { lt: inicioDia }, balanzaTotal: { not: null } },
-      orderBy: { fecha: 'desc' },
-    }),
+    prisma.corteCaja.findFirst({ where: { fecha: { lt: inicioDia } }, orderBy: { fecha: 'desc' } }),
     prisma.venta.findMany({
       where: { cancelada: true, canceladaEn: { gte: inicioDia, lte: fin } },
       include: { cliente: true, canceladaPor: true },
@@ -468,13 +430,11 @@ export async function corteDelDia(
     corteExistente: corteExistente
       ? {
           id: corteExistente.id,
-          estado: estadoDeCorte(corteExistente),
           efectivoContado: Number(corteExistente.efectivoContado),
-          saldoBancoContado:
-            corteExistente.saldoBancoContado !== null ? Number(corteExistente.saldoBancoContado) : null,
-          utilidadDia: corteExistente.utilidadDia !== null ? Number(corteExistente.utilidadDia) : null,
-          valorInventario: corteExistente.valorInventario !== null ? Number(corteExistente.valorInventario) : null,
-          balanzaTotal: corteExistente.balanzaTotal !== null ? Number(corteExistente.balanzaTotal) : null,
+          saldoBancoContado: Number(corteExistente.saldoBancoContado),
+          utilidadDia: Number(corteExistente.utilidadDia),
+          valorInventario: Number(corteExistente.valorInventario),
+          balanzaTotal: Number(corteExistente.balanzaTotal),
           observacion: corteExistente.observacion,
           facturasPendientesPorProveedor:
             (corteExistente.facturasPendientesPorProveedor as unknown as typeof facturasPendientesPorProveedor) ?? [],
@@ -629,97 +589,25 @@ export async function corteDelDia(
 }
 
 /**
- * Paso 1: guarda cuanto efectivo se contó. Crea el corte del día si
- * todavía no existe (solo se permite uno por día -- unique constraint en
- * la base de datos como segunda línea de defensa); si ya existe y sigue
- * abierto (no conciliado), permite recapturar el efectivo antes de seguir
- * con el paso 2. Una vez conciliado, ya no se puede tocar desde aquí --
- * hay que corregirlo desde el histórico.
+ * Guarda el corte de caja del dia de HOY. Solo se permite uno por dia:
+ * si ya existe, hay que corregirlo desde el historico en vez de crear
+ * uno nuevo (esto tambien esta protegido por un unique constraint en
+ * la base de datos, como segunda linea de defensa).
  */
-export async function guardarEfectivoCorte(
+export async function guardarCorteCaja(
   registradoPorId: string,
   efectivoContado: number,
+  saldoBancoContado: number,
   fechaCorte?: Date,
   observacion?: string
 ) {
   const hoy = normalizarFecha(fechaCorte ?? new Date());
-
-  const existente = await prisma.corteCaja.findUnique({ where: { fecha: hoy } });
-  if (existente) {
-    if (estadoDeCorte(existente) === 'conciliado') {
-      throw new CorteYaCerradoError();
-    }
-    return prisma.corteCaja.update({
-      where: { id: existente.id },
-      data: { efectivoContado, observacion: observacion?.trim() || existente.observacion },
-    });
-  }
-
-  try {
-    return await prisma.corteCaja.create({
-      data: {
-        registradoPorId,
-        fecha: hoy,
-        efectivoContado,
-        observacion: observacion?.trim() || null,
-      },
-    });
-  } catch (err: any) {
-    // P2002 = violacion de unique constraint (por si dos personas
-    // intentaron capturar el corte de hoy casi al mismo tiempo).
-    if (err.code === 'P2002') {
-      throw new CorteYaExisteError();
-    }
-    throw err;
-  }
-}
-
-/**
- * Paso 2: guarda cuanto hay en banco, sobre un corte que ya tiene el
- * efectivo capturado (paso 1). Todavia no calcula la balanza -- eso
- * queda para el paso 3 (conciliar), a proposito, para que el usuario
- * pueda revisar los dos numeros capturados antes de cerrar el dia.
- */
-export async function guardarBancoCorte(saldoBancoContado: number, fechaCorte?: Date, observacion?: string) {
-  const hoy = normalizarFecha(fechaCorte ?? new Date());
-
-  const existente = await prisma.corteCaja.findUnique({ where: { fecha: hoy } });
-  if (!existente) {
-    throw new CorteNoExisteError();
-  }
-  if (estadoDeCorte(existente) === 'conciliado') {
-    throw new CorteYaCerradoError();
-  }
-
-  return prisma.corteCaja.update({
-    where: { id: existente.id },
-    data: { saldoBancoContado, observacion: observacion?.trim() || existente.observacion },
-  });
-}
-
-/**
- * Paso 3 (conciliación): con el efectivo y el banco ya capturados,
- * calcula la utilidad/gastos/valor de inventario/balanza del día y cierra
- * el corte -- de aquí en adelante ya no se puede tocar desde los pasos 1
- * y 2, solo corrigiendo desde el histórico.
- */
-export async function conciliarCorte(fechaCorte?: Date) {
-  const hoy = normalizarFecha(fechaCorte ?? new Date());
   const fin = finDelDia(hoy);
 
   const existente = await prisma.corteCaja.findUnique({ where: { fecha: hoy } });
-  if (!existente) {
-    throw new CorteNoExisteError();
+  if (existente) {
+    throw new CorteYaExisteError();
   }
-  if (existente.saldoBancoContado === null) {
-    throw new CorteFaltaBancoError();
-  }
-  if (estadoDeCorte(existente) === 'conciliado') {
-    throw new CorteYaCerradoError();
-  }
-
-  const efectivoContado = Number(existente.efectivoContado);
-  const saldoBancoContado = Number(existente.saldoBancoContado);
 
   const [{ utilidadDia, gastosDia }, valorInventario, cartera, porPagar, saldosInicialesClientes] = await Promise.all([
     utilidadYGastosDelDia(hoy, fin),
@@ -752,22 +640,35 @@ export async function conciliarCorte(fechaCorte?: Date) {
   const cuentasPorPagar = porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0);
   const facturasPendientesPorProveedor = agruparFacturasPendientes(porPagar);
   // La balanza es TODOS los activos menos TODOS los pasivos: lo que hay
-  // en efectivo y en el banco (lo que se conto en los pasos 1 y 2), mas
-  // lo que deben los clientes, mas el valor del inventario a costo, menos
-  // lo que se le debe a los proveedores.
+  // en efectivo y en el banco (lo que se acaba de contar), mas lo que
+  // deben los clientes, mas el valor del inventario a costo, menos lo
+  // que se le debe a los proveedores.
   const balanzaTotal =
     efectivoContado + saldoBancoContado + carteraPendiente + valorInventario - cuentasPorPagar;
 
-  return prisma.corteCaja.update({
-    where: { id: existente.id },
-    data: {
-      utilidadDia,
-      gastosDia,
-      valorInventario,
-      balanzaTotal,
-      facturasPendientesPorProveedor: facturasPendientesPorProveedor as any,
-    },
-  });
+  try {
+    return await prisma.corteCaja.create({
+      data: {
+        registradoPorId,
+        fecha: hoy,
+        efectivoContado,
+        saldoBancoContado,
+        utilidadDia,
+        gastosDia,
+        valorInventario,
+        balanzaTotal,
+        observacion: observacion?.trim() || null,
+        facturasPendientesPorProveedor: facturasPendientesPorProveedor as any,
+      },
+    });
+  } catch (err: any) {
+    // P2002 = violacion de unique constraint (por si dos personas
+    // intentaron guardar el corte de hoy casi al mismo tiempo).
+    if (err.code === 'P2002') {
+      throw new CorteYaExisteError();
+    }
+    throw err;
+  }
 }
 
 /** Historico de cortes, mas reciente primero, con el cuadre de cada uno contra el anterior. */
@@ -783,13 +684,12 @@ export async function listarCortes() {
   const mapeados: Array<{
     id: string;
     fecha: Date;
-    estado: 'efectivo' | 'banco' | 'conciliado';
     efectivoContado: number;
-    saldoBancoContado: number | null;
-    utilidadDia: number | null;
-    gastosDia: number | null;
-    valorInventario: number | null;
-    balanzaTotal: number | null;
+    saldoBancoContado: number;
+    utilidadDia: number;
+    gastosDia: number;
+    valorInventario: number;
+    balanzaTotal: number;
     balanzaEsperada: number | null;
     diferenciaCuadre: number | null;
     registradoPor: string;
@@ -798,35 +698,10 @@ export async function listarCortes() {
   }> = [];
 
   for (const c of cortes) {
-    const estado = estadoDeCorte(c);
-    const fechaCorte = normalizarFecha(c.fecha);
-
-    // Un corte que se quedo a medias (nunca se concilio) no tiene
-    // balanzaTotal/utilidadDia -- no cuenta como eslabon de la cadena
-    // balanzaAyer + utilidad - gastos, ni se le puede calcular un cuadre.
-    if (estado !== 'conciliado') {
-      mapeados.push({
-        id: c.id,
-        fecha: c.fecha,
-        estado,
-        efectivoContado: Number(c.efectivoContado),
-        saldoBancoContado: c.saldoBancoContado !== null ? Number(c.saldoBancoContado) : null,
-        utilidadDia: null,
-        gastosDia: null,
-        valorInventario: null,
-        balanzaTotal: null,
-        balanzaEsperada: null,
-        diferenciaCuadre: null,
-        registradoPor: c.registradoPor.nombre,
-        actualizadoEn: c.actualizadoEn,
-        observacion: c.observacion,
-      });
-      continue;
-    }
-
     const utilidadDia = Number(c.utilidadDia);
     const gastosDia = Number(c.gastosDia);
     const balanzaTotal = Number(c.balanzaTotal);
+    const fechaCorte = normalizarFecha(c.fecha);
 
     let balanzaEsperada: number | null = null;
     if (balanzaPrevia !== null && fechaPrevia !== null) {
@@ -857,7 +732,6 @@ export async function listarCortes() {
     mapeados.push({
       id: c.id,
       fecha: c.fecha,
-      estado,
       efectivoContado: Number(c.efectivoContado),
       saldoBancoContado: Number(c.saldoBancoContado),
       utilidadDia,
