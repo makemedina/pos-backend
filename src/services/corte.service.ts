@@ -175,6 +175,31 @@ export async function corteDelDia(
   const inicioDia = normalizarFecha(fecha);
   const fin = finDelDia(inicioDia);
 
+  // Se resuelven primero el corte ya guardado de este dia y el corte
+  // anterior (el ultimo antes de este) -- todo lo demas depende del
+  // rango [desde, fin] que sale de aqui.
+  const [corteExistente, corteAnterior] = await Promise.all([
+    prisma.corteCaja.findUnique({ where: { fecha: inicioDia } }),
+    prisma.corteCaja.findFirst({ where: { fecha: { lt: inicioDia } }, orderBy: { fecha: 'desc' } }),
+  ]);
+
+  // Si el ultimo corte no fue AYER (se salto uno o mas dias sin
+  // capturarlo), este corte "abarca" todos esos dias saltados: se
+  // ensancha el rango de TODA la actividad (ventas, gastos, pagos,
+  // compras, inventario) a [desde, fin] en vez de solo el dia de hoy, para
+  // que no se pierda de vista lo que paso esos dias. Cada renglon del
+  // detalle ya trae su propia fecha, para poder distinguir de que dia es
+  // cada quien cuando el corte cubre mas de uno.
+  const desde = corteAnterior
+    ? (() => {
+        const d = new Date(corteAnterior.fecha);
+        d.setDate(d.getDate() + 1);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      })()
+    : inicioDia;
+  const abarcaVariosDias = desde.getTime() < inicioDia.getTime();
+
   const [
     inventarioMovs,
     ventasHoy,
@@ -187,27 +212,25 @@ export async function corteDelDia(
     porPagar,
     saldosInicialesClientes,
     { utilidadDia, gastosDia },
-    corteExistente,
     valorInventario,
-    corteAnterior,
     ventasCanceladasHoy,
     comprasCanceladasHoy,
     gastosCanceladosHoy,
     configuracion,
   ] = await Promise.all([
-    movimientosInventario(inicioDia, fin),
+    movimientosInventario(desde, fin),
     prisma.venta.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false },
+      where: { fecha: { gte: desde, lte: fin }, cancelada: false },
       include: { cliente: true, vendedor: true, pagos: { orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
     prisma.compra.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelada: false, esCargaInicial: false },
+      where: { fecha: { gte: desde, lte: fin }, cancelada: false, esCargaInicial: false },
       include: { proveedor: true, pagos: { orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
     prisma.gasto.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false },
+      where: { fecha: { gte: desde, lte: fin }, cancelado: false },
       include: { categoria: true, proveedor: true, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
@@ -216,23 +239,23 @@ export async function corteDelDia(
     // corte los sigue contando como dinero cobrado aunque cancelarVenta/
     // cancelarCompra ya revirtieron ese monto de saldoEfectivo/BancoActual.
     //
-    // Solo abonos a ventas/compras de DIAS ANTERIORES (venta/compra.fecha
-    // < inicioDia): el pago inicial de una venta/compra hecha HOY ya se
-    // cuenta en "Ventas del dia"/"Compras del dia" (via v.pagos/c.pagos)
-    // -- si tambien se contara aqui, se duplicaria ese dinero en el
-    // cuadre de efectivo.
+    // Solo abonos a ventas/compras de ANTES DEL RANGO (venta/compra.fecha
+    // < desde): el pago inicial de una venta/compra hecha DENTRO del
+    // rango ya se cuenta en "Ventas del periodo"/"Compras del periodo"
+    // (via v.pagos/c.pagos) -- si tambien se contara aqui, se duplicaria
+    // ese dinero en el cuadre de efectivo.
     prisma.pagoVenta.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false, venta: { cancelada: false, fecha: { lt: inicioDia } } },
+      where: { fecha: { gte: desde, lte: fin }, cancelado: false, venta: { cancelada: false, fecha: { lt: desde } } },
       include: { venta: { include: { cliente: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
     prisma.pagoCompra.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, compra: { cancelada: false, fecha: { lt: inicioDia } } },
+      where: { fecha: { gte: desde, lte: fin }, compra: { cancelada: false, fecha: { lt: desde } } },
       include: { compra: { include: { proveedor: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
     prisma.depositoBanco.findMany({
-      where: { fecha: { gte: inicioDia, lte: fin }, cancelado: false },
+      where: { fecha: { gte: desde, lte: fin }, cancelado: false },
       include: { registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
@@ -257,49 +280,30 @@ export async function corteDelDia(
       orderBy: { fecha: 'asc' },
     }),
     prisma.cliente.aggregate({ _sum: { saldoInicial: true } }),
-    utilidadYGastosDelDia(inicioDia, fin),
-    prisma.corteCaja.findUnique({ where: { fecha: inicioDia } }),
+    utilidadYGastosDelDia(desde, fin),
     valorInventarioActual(),
-    prisma.corteCaja.findFirst({ where: { fecha: { lt: inicioDia } }, orderBy: { fecha: 'desc' } }),
     prisma.venta.findMany({
-      where: { cancelada: true, canceladaEn: { gte: inicioDia, lte: fin } },
+      where: { cancelada: true, canceladaEn: { gte: desde, lte: fin } },
       include: { cliente: true, canceladaPor: true },
       orderBy: { canceladaEn: 'asc' },
     }),
     prisma.compra.findMany({
-      where: { cancelada: true, canceladaEn: { gte: inicioDia, lte: fin } },
+      where: { cancelada: true, canceladaEn: { gte: desde, lte: fin } },
       include: { proveedor: true, canceladaPor: true },
       orderBy: { canceladaEn: 'asc' },
     }),
     prisma.gasto.findMany({
-      where: { cancelado: true, canceladoEn: { gte: inicioDia, lte: fin } },
+      where: { cancelado: true, canceladoEn: { gte: desde, lte: fin } },
       include: { categoria: true, canceladoPor: true },
       orderBy: { canceladoEn: 'asc' },
     }),
     prisma.configuracion.findUnique({ where: { id: 'singleton' } }),
   ]);
 
-  // Para el chequeo de balanza (mas abajo): si el corte anterior no fue
-  // justo ayer -- se le olvido a alguien capturarlo un dia -- se usa la
-  // utilidad/gastos ACUMULADOS desde ese corte hasta hoy, no solo los de
-  // HOY. Sin esto, "balanzaEsperada" = balanzaAyer + utilidadDia -
-  // gastosDia siempre usaba solo el dia de hoy, y la utilidad/gastos de
-  // cualquier dia saltado de por medio nunca se sumaban en ningun lado
-  // -- el chequeo quedaba roto para siempre hasta capturar ese dia a
-  // mano. Cuando no hay hueco (corte anterior fue ayer), esto da
-  // exactamente lo mismo que utilidadDia/gastosDia.
-  const { utilidadDia: utilidadAcumuladaDesdeUltimoCorte, gastosDia: gastosAcumuladosDesdeUltimoCorte } =
-    corteAnterior
-      ? await utilidadYGastosDelDia(
-          (() => {
-            const d = new Date(corteAnterior.fecha);
-            d.setDate(d.getDate() + 1);
-            d.setHours(0, 0, 0, 0);
-            return d;
-          })(),
-          fin
-        )
-      : { utilidadDia, gastosDia };
+  // utilidadDia/gastosDia ya vienen calculados sobre [desde, fin] -- que
+  // es exactamente "desde el dia siguiente al ultimo corte hasta hoy",
+  // asi que sirven tal cual para el cuadre de balanza contra ese corte
+  // anterior, sin necesidad de un segundo calculo "acumulado" por separado.
 
   const totalVendido = ventasHoy.reduce((acc, v) => acc + Number(v.total), 0);
   const totalCobrado = ventasHoy.reduce(
@@ -411,16 +415,19 @@ export async function corteDelDia(
   // usando estos mismos numeros (cartera, valorInventario, cuentasPorPagar)
   // mas lo que vaya tecleando.
   const balanzaAyer = corteAnterior ? Number(corteAnterior.balanzaTotal) : null;
-  const balanzaEsperada =
-    balanzaAyer !== null
-      ? balanzaAyer + utilidadAcumuladaDesdeUltimoCorte - gastosAcumuladosDesdeUltimoCorte
-      : null;
+  const balanzaEsperada = balanzaAyer !== null ? balanzaAyer + utilidadDia - gastosDia : null;
   // Para el cuadre de efectivo (distinto de la balanza): cuanto efectivo
   // quedo contado el corte anterior, punto de partida del dia de hoy.
   const efectivoAyer = corteAnterior ? Number(corteAnterior.efectivoContado) : null;
 
   return {
     yaExisteCorteHoy: !!corteExistente,
+    // Si el ultimo corte no fue justo ayer, este corte abarca varios dias
+    // (desde el siguiente al ultimo corte hasta hoy) -- el frontend usa
+    // esto para mostrar la fecha de cada renglon (ya viene en cada uno) y
+    // para avisar que el reporte cubre mas de un dia, no solo hoy.
+    desde: desde.toISOString(),
+    abarcaVariosDias,
     // Si este dia ya tiene un corte guardado, se incluyen tambien
     // utilidadDia/valorInventario/balanzaTotal tal como quedaron
     // capturados ESE dia -- necesarios para que "Utilidad y balanza" al
@@ -604,13 +611,30 @@ export async function guardarCorteCaja(
   const hoy = normalizarFecha(fechaCorte ?? new Date());
   const fin = finDelDia(hoy);
 
-  const existente = await prisma.corteCaja.findUnique({ where: { fecha: hoy } });
+  const [existente, corteAnterior] = await Promise.all([
+    prisma.corteCaja.findUnique({ where: { fecha: hoy } }),
+    prisma.corteCaja.findFirst({ where: { fecha: { lt: hoy } }, orderBy: { fecha: 'desc' } }),
+  ]);
   if (existente) {
     throw new CorteYaExisteError();
   }
 
+  // Si el corte anterior no fue justo ayer, la utilidad/gastos que se
+  // guardan con este corte cubren TODOS los dias saltados (desde el
+  // siguiente al ultimo corte hasta hoy) -- mismo rango que ya se le
+  // mostro al usuario en la vista previa (corteDelDia), para que lo
+  // guardado coincida con lo que revisco antes de guardar.
+  const desde = corteAnterior
+    ? (() => {
+        const d = new Date(corteAnterior.fecha);
+        d.setDate(d.getDate() + 1);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      })()
+    : hoy;
+
   const [{ utilidadDia, gastosDia }, valorInventario, cartera, porPagar, saldosInicialesClientes] = await Promise.all([
-    utilidadYGastosDelDia(hoy, fin),
+    utilidadYGastosDelDia(desde, fin),
     valorInventarioActual(),
     prisma.venta.aggregate({
       // OJO: no filtrar por estadoPago (antes: { in: ['pendiente','parcial'] }).
