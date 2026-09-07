@@ -153,6 +153,23 @@ interface FiltrosMovimientosDetalle {
   productoId?: string;
 }
 
+// Semana calendario de lunes a domingo, "semanasAtras" semanas atras de
+// la semana actual (0 = esta semana, 1 = semana pasada, 2 = hace 2
+// semanas, etc.) -- no son "los ultimos 7 dias", son semanas calendario.
+function calcularSemana(hoy: Date, semanasAtras: number) {
+  const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado
+  const diffLunes = diaSemana === 0 ? 6 : diaSemana - 1;
+  const lunesEstaSemana = new Date(hoy);
+  lunesEstaSemana.setDate(hoy.getDate() - diffLunes);
+  const lunes = new Date(lunesEstaSemana);
+  lunes.setDate(lunesEstaSemana.getDate() - semanasAtras * 7);
+  lunes.setHours(0, 0, 0, 0);
+  const domingo = new Date(lunes);
+  domingo.setDate(lunes.getDate() + 6);
+  domingo.setHours(23, 59, 59, 999);
+  return { inicio: lunes, fin: domingo };
+}
+
 function obtenerRangoFechas(periodo: string, desde?: string, hasta?: string) {
   const hoy = new Date();
   const inicio = new Date(hoy);
@@ -179,33 +196,38 @@ function obtenerRangoFechas(periodo: string, desde?: string, hasta?: string) {
       fin.setTime(finAyer.getTime());
       break;
     }
+    case 'antier': {
+      const antier = new Date(hoy);
+      antier.setDate(hoy.getDate() - 2);
+      antier.setHours(0, 0, 0, 0);
+      const finAntier = new Date(antier);
+      finAntier.setHours(23, 59, 59, 999);
+      inicio.setTime(antier.getTime());
+      fin.setTime(finAntier.getTime());
+      break;
+    }
     case 'semana': {
-      // Semana calendario de lunes a domingo (no los ultimos 7 dias).
-      const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado
-      const diffLunes = diaSemana === 0 ? 6 : diaSemana - 1;
-      const lunes = new Date(hoy);
-      lunes.setDate(hoy.getDate() - diffLunes);
-      lunes.setHours(0, 0, 0, 0);
-      const domingo = new Date(lunes);
-      domingo.setDate(lunes.getDate() + 6);
-      domingo.setHours(23, 59, 59, 999);
-      inicio.setTime(lunes.getTime());
-      fin.setTime(domingo.getTime());
+      const r = calcularSemana(hoy, 0);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
       break;
     }
     case 'semana_pasada': {
-      const diaSemana = hoy.getDay();
-      const diffLunes = diaSemana === 0 ? 6 : diaSemana - 1;
-      const lunesEstaSemana = new Date(hoy);
-      lunesEstaSemana.setDate(hoy.getDate() - diffLunes);
-      const lunesPasado = new Date(lunesEstaSemana);
-      lunesPasado.setDate(lunesEstaSemana.getDate() - 7);
-      lunesPasado.setHours(0, 0, 0, 0);
-      const domingoPasado = new Date(lunesPasado);
-      domingoPasado.setDate(lunesPasado.getDate() + 6);
-      domingoPasado.setHours(23, 59, 59, 999);
-      inicio.setTime(lunesPasado.getTime());
-      fin.setTime(domingoPasado.getTime());
+      const r = calcularSemana(hoy, 1);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
+      break;
+    }
+    case 'hace_2_semanas': {
+      const r = calcularSemana(hoy, 2);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
+      break;
+    }
+    case 'hace_3_semanas': {
+      const r = calcularSemana(hoy, 3);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
       break;
     }
     case 'anio':
