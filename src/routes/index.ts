@@ -19,6 +19,13 @@ import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 import {
+  listarPendientes,
+  listarPendientesDeHoy,
+  crearPendiente,
+  actualizarPendiente,
+  eliminarPendiente,
+} from '../services/pendientes.service';
+import {
   buscarClientes,
   crearClienteRapido,
   crearCliente,
@@ -1521,6 +1528,74 @@ router.post('/clientes/:id/llamadas/hoy', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al registrar la llamada' });
+  }
+});
+
+router.get('/pendientes', async (req, res) => {
+  try {
+    const pendientes = await listarPendientes(req.query.incluirHechos === 'true');
+    res.json(pendientes);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar los pendientes' });
+  }
+});
+
+router.get('/pendientes/hoy', async (_req, res) => {
+  try {
+    const pendientes = await listarPendientesDeHoy();
+    res.json(pendientes);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar los pendientes de hoy' });
+  }
+});
+
+router.post('/pendientes', async (req, res) => {
+  try {
+    const { concepto, fecha, notas } = req.body;
+    if (!concepto || !String(concepto).trim()) {
+      return res.status(400).json({ error: 'El concepto es obligatorio' });
+    }
+    if (!fecha) {
+      return res.status(400).json({ error: 'La fecha es obligatoria' });
+    }
+    const pendiente = await crearPendiente(
+      String(concepto).trim(),
+      fechaLocalDesdeString(fecha),
+      req.usuario!.id,
+      notas ? String(notas) : undefined
+    );
+    res.status(201).json(pendiente);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al crear el pendiente' });
+  }
+});
+
+router.put('/pendientes/:id', async (req, res) => {
+  try {
+    const { hecho, concepto, fecha, notas } = req.body;
+    const datos: { hecho?: boolean; concepto?: string; fecha?: Date; notas?: string } = {};
+    if (hecho !== undefined) datos.hecho = !!hecho;
+    if (concepto !== undefined) datos.concepto = String(concepto);
+    if (fecha !== undefined) datos.fecha = fechaLocalDesdeString(fecha);
+    if (notas !== undefined) datos.notas = String(notas);
+    const pendiente = await actualizarPendiente(req.params.id, datos);
+    res.json(pendiente);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar el pendiente' });
+  }
+});
+
+router.delete('/pendientes/:id', async (req, res) => {
+  try {
+    await eliminarPendiente(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al eliminar el pendiente' });
   }
 });
 

@@ -47,6 +47,7 @@ model Usuario {
   pagosCompraCancelados PagoCompra[] @relation("CancelaPagoCompra")
   pagosCompraAutorizadosCancelacion PagoCompra[] @relation("AutorizaCancelacionPagoCompra")
   llamadasClienteRegistradas LlamadaCliente[]
+  pendientesRegistrados Pendiente[]
   sesiones           Sesion[]
 }
 
@@ -283,6 +284,21 @@ model LlamadaCliente {
   actualizadoEn   DateTime @updatedAt
 
   @@unique([clienteId, fecha])
+}
+
+// Recordatorio/tarea suelta programada para un dia especifico (no ligada a
+// un cliente) -- alimenta la pantalla "Pendientes" y, si esta programada
+// para hoy, tambien aparece en "Llamadas de hoy" junto con las llamadas.
+model Pendiente {
+  id              String   @id @default(uuid())
+  concepto        String
+  fecha           DateTime // dia para el que esta programado, normalizado a medianoche
+  hecho           Boolean  @default(false)
+  notas           String?
+  registradoPorId String
+  registradoPor   Usuario  @relation(fields: [registradoPorId], references: [id])
+  creadoEn        DateTime @default(now())
+  actualizadoEn   DateTime @updatedAt
 }
 
 // ---------- VENTAS ----------
