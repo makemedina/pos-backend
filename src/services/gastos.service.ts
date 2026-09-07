@@ -2,6 +2,7 @@ import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente } from './configuracion.service';
 import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
+import { fechaLocalDesdeString } from '../utils/fecha';
 
 const PREFIJO_COMPROBANTES = 'recibos-gastos/';
 
@@ -73,16 +74,151 @@ export async function crearCategoriaGasto(nombre: string, departamento: string) 
   });
 }
 
+export interface FiltrosHistorialGastos {
+  periodo?: string; // dia | ayer | antier | semana | semana_pasada | hace_2_semanas | hace_3_semanas | mes | anio | rango | todos
+  desde?: string;
+  hasta?: string;
+  categoriaId?: string;
+  proveedorId?: string;
+  metodoPago?: string; // efectivo | transferencia
+}
+
+// Semana calendario de lunes a domingo, "semanasAtras" semanas atras de
+// la semana actual (0 = esta semana, 1 = semana pasada, 2 = hace 2
+// semanas, etc.) -- no son "los ultimos 7 dias", son semanas calendario.
+function calcularSemana(hoy: Date, semanasAtras: number) {
+  const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado
+  const diffLunes = diaSemana === 0 ? 6 : diaSemana - 1;
+  const lunesEstaSemana = new Date(hoy);
+  lunesEstaSemana.setDate(hoy.getDate() - diffLunes);
+  const lunes = new Date(lunesEstaSemana);
+  lunes.setDate(lunesEstaSemana.getDate() - semanasAtras * 7);
+  lunes.setHours(0, 0, 0, 0);
+  const domingo = new Date(lunes);
+  domingo.setDate(lunes.getDate() + 6);
+  domingo.setHours(23, 59, 59, 999);
+  return { inicio: lunes, fin: domingo };
+}
+
+function obtenerRangoGastos(periodo: string, desde?: string, hasta?: string) {
+  const hoy = new Date();
+  const inicio = new Date(hoy);
+  const fin = new Date(hoy);
+
+  switch (periodo) {
+    case 'dia':
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'ayer': {
+      const ayer = new Date(hoy);
+      ayer.setDate(hoy.getDate() - 1);
+      ayer.setHours(0, 0, 0, 0);
+      const finAyer = new Date(ayer);
+      finAyer.setHours(23, 59, 59, 999);
+      inicio.setTime(ayer.getTime());
+      fin.setTime(finAyer.getTime());
+      break;
+    }
+    case 'antier': {
+      const antier = new Date(hoy);
+      antier.setDate(hoy.getDate() - 2);
+      antier.setHours(0, 0, 0, 0);
+      const finAntier = new Date(antier);
+      finAntier.setHours(23, 59, 59, 999);
+      inicio.setTime(antier.getTime());
+      fin.setTime(finAntier.getTime());
+      break;
+    }
+    case 'semana': {
+      const r = calcularSemana(hoy, 0);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
+      break;
+    }
+    case 'semana_pasada': {
+      const r = calcularSemana(hoy, 1);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
+      break;
+    }
+    case 'hace_2_semanas': {
+      const r = calcularSemana(hoy, 2);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
+      break;
+    }
+    case 'hace_3_semanas': {
+      const r = calcularSemana(hoy, 3);
+      inicio.setTime(r.inicio.getTime());
+      fin.setTime(r.fin.getTime());
+      break;
+    }
+    case 'anio':
+      inicio.setMonth(0, 1);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'rango': {
+      if (desde) {
+        const d = fechaLocalDesdeString(desde);
+        d.setHours(0, 0, 0, 0);
+        inicio.setTime(d.getTime());
+      } else {
+        inicio.setDate(1);
+        inicio.setHours(0, 0, 0, 0);
+      }
+      if (hasta) {
+        const h = fechaLocalDesdeString(hasta);
+        h.setHours(23, 59, 59, 999);
+        fin.setTime(h.getTime());
+      } else {
+        fin.setHours(23, 59, 59, 999);
+      }
+      break;
+    }
+    case 'todos':
+      inicio.setFullYear(2000, 0, 1);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setFullYear(2100, 0, 1);
+      fin.setHours(23, 59, 59, 999);
+      break;
+    case 'mes':
+    default:
+      inicio.setDate(1);
+      inicio.setHours(0, 0, 0, 0);
+      fin.setHours(23, 59, 59, 999);
+      break;
+  }
+
+  return { inicio, fin };
+}
+
 /**
  * Regla de negocio: cualquier usuario puede registrar un gasto sin
  * autorizacion previa, pero solo ve los propios. Solo el administrador
  * (o quien tenga puedeVerGastosTodos) ve los de todos.
+ *
+ * Sin filtros (el default), se comporta igual que antes -- todos los
+ * gastos, sin restriccion de fecha ("todos"). Con filtros, sirve como el
+ * reporte de gastos: por periodo/rango de fechas, categoria, proveedor y
+ * metodo de pago.
  */
-export async function listarGastos(usuario: { id: string; rolBase: string; permisos: { puedeVerGastosTodos: boolean } | null }) {
+export async function listarGastos(
+  usuario: { id: string; rolBase: string; permisos: { puedeVerGastosTodos: boolean } | null },
+  filtros: FiltrosHistorialGastos = {}
+) {
   const puedeVerTodos = usuario.rolBase === 'administrador' || usuario.permisos?.puedeVerGastosTodos;
+  const { inicio, fin } = obtenerRangoGastos(filtros.periodo || 'todos', filtros.desde, filtros.hasta);
 
   return prisma.gasto.findMany({
-    where: puedeVerTodos ? undefined : { registradoPorId: usuario.id },
+    where: {
+      ...(puedeVerTodos ? {} : { registradoPorId: usuario.id }),
+      fecha: { gte: inicio, lte: fin },
+      ...(filtros.categoriaId ? { categoriaId: filtros.categoriaId } : {}),
+      ...(filtros.proveedorId ? { proveedorId: filtros.proveedorId } : {}),
+      ...(filtros.metodoPago ? { metodoPago: filtros.metodoPago } : {}),
+    },
     include: { categoria: true, registradoPor: true, proveedor: true },
     orderBy: { fecha: 'desc' },
   });

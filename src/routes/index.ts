@@ -420,7 +420,15 @@ router.post('/gastos/categorias', async (req, res) => {
 
 router.get('/gastos', async (req, res) => {
   try {
-    const gastos = await listarGastos(req.usuario!);
+    const { periodo, desde, hasta, categoriaId, proveedorId, metodoPago } = req.query;
+    const gastos = await listarGastos(req.usuario!, {
+      periodo: periodo as string | undefined,
+      desde: desde as string | undefined,
+      hasta: hasta as string | undefined,
+      categoriaId: categoriaId as string | undefined,
+      proveedorId: proveedorId as string | undefined,
+      metodoPago: metodoPago as string | undefined,
+    });
     res.json(gastos);
   } catch (err) {
     console.error(err);
