@@ -263,6 +263,7 @@ model Cliente {
   ventas Venta[]
   cotizaciones Cotizacion[]
   llamadas LlamadaCliente[]
+  pendientes Pendiente[]
 }
 
 // Registro del dia de llamada de un cliente -- lo que alimenta el
@@ -295,6 +296,11 @@ model Pendiente {
   fecha           DateTime // dia para el que esta programado, normalizado a medianoche
   hecho           Boolean  @default(false)
   notas           String?
+  // Cliente ligado (opcional) -- para recordatorios del tipo "hablarle a
+  // fulano el jueves". Si el cliente se borra, el pendiente se queda sin
+  // liga (no se bloquea ni se borra el pendiente).
+  clienteId       String?
+  cliente         Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
   registradoPorId String
   registradoPor   Usuario  @relation(fields: [registradoPorId], references: [id])
   creadoEn        DateTime @default(now())

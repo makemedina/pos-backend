@@ -1553,7 +1553,7 @@ router.get('/pendientes/hoy', async (_req, res) => {
 
 router.post('/pendientes', async (req, res) => {
   try {
-    const { concepto, fecha, notas } = req.body;
+    const { concepto, fecha, notas, clienteId } = req.body;
     if (!concepto || !String(concepto).trim()) {
       return res.status(400).json({ error: 'El concepto es obligatorio' });
     }
@@ -1564,7 +1564,8 @@ router.post('/pendientes', async (req, res) => {
       String(concepto).trim(),
       fechaLocalDesdeString(fecha),
       req.usuario!.id,
-      notas ? String(notas) : undefined
+      notas ? String(notas) : undefined,
+      clienteId ? String(clienteId) : undefined
     );
     res.status(201).json(pendiente);
   } catch (err) {
@@ -1575,12 +1576,13 @@ router.post('/pendientes', async (req, res) => {
 
 router.put('/pendientes/:id', async (req, res) => {
   try {
-    const { hecho, concepto, fecha, notas } = req.body;
-    const datos: { hecho?: boolean; concepto?: string; fecha?: Date; notas?: string } = {};
+    const { hecho, concepto, fecha, notas, clienteId } = req.body;
+    const datos: { hecho?: boolean; concepto?: string; fecha?: Date; notas?: string; clienteId?: string | null } = {};
     if (hecho !== undefined) datos.hecho = !!hecho;
     if (concepto !== undefined) datos.concepto = String(concepto);
     if (fecha !== undefined) datos.fecha = fechaLocalDesdeString(fecha);
     if (notas !== undefined) datos.notas = String(notas);
+    if (clienteId !== undefined) datos.clienteId = clienteId ? String(clienteId) : null;
     const pendiente = await actualizarPendiente(req.params.id, datos);
     res.json(pendiente);
   } catch (err) {

@@ -6,6 +6,8 @@ function normalizarFecha(fecha: Date) {
   return f;
 }
 
+const INCLUIR_CLIENTE = { registradoPor: true, cliente: true } as const;
+
 /**
  * Todos los pendientes, mas recientes primero por fecha programada.
  * Por default no trae los ya hechos (para no saturar la lista); con
@@ -14,7 +16,7 @@ function normalizarFecha(fecha: Date) {
 export async function listarPendientes(incluirHechos = false) {
   return prisma.pendiente.findMany({
     where: incluirHechos ? {} : { hecho: false },
-    include: { registradoPor: true },
+    include: INCLUIR_CLIENTE,
     orderBy: { fecha: 'asc' },
   });
 }
@@ -24,7 +26,7 @@ export async function listarPendientesDeHoy() {
   const hoy = normalizarFecha(new Date());
   return prisma.pendiente.findMany({
     where: { fecha: hoy },
-    include: { registradoPor: true },
+    include: INCLUIR_CLIENTE,
     orderBy: { creadoEn: 'asc' },
   });
 }
@@ -33,7 +35,8 @@ export async function crearPendiente(
   concepto: string,
   fecha: Date,
   registradoPorId: string,
-  notas?: string
+  notas?: string,
+  clienteId?: string
 ) {
   return prisma.pendiente.create({
     data: {
@@ -41,13 +44,15 @@ export async function crearPendiente(
       fecha: normalizarFecha(fecha),
       registradoPorId,
       notas: notas || null,
+      clienteId: clienteId || null,
     },
+    include: INCLUIR_CLIENTE,
   });
 }
 
 export async function actualizarPendiente(
   id: string,
-  datos: { hecho?: boolean; concepto?: string; fecha?: Date; notas?: string }
+  datos: { hecho?: boolean; concepto?: string; fecha?: Date; notas?: string; clienteId?: string | null }
 ) {
   return prisma.pendiente.update({
     where: { id },
@@ -56,7 +61,9 @@ export async function actualizarPendiente(
       ...(datos.concepto !== undefined ? { concepto: datos.concepto } : {}),
       ...(datos.fecha !== undefined ? { fecha: normalizarFecha(datos.fecha) } : {}),
       ...(datos.notas !== undefined ? { notas: datos.notas } : {}),
+      ...(datos.clienteId !== undefined ? { clienteId: datos.clienteId } : {}),
     },
+    include: INCLUIR_CLIENTE,
   });
 }
 
