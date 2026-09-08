@@ -1060,6 +1060,7 @@ router.get('/compras/historial', requierePermiso('puedeVerCostos'), async (req, 
       hasta: req.query.hasta as string | undefined,
       proveedorId: req.query.proveedorId as string | undefined,
       estadoPago: req.query.estadoPago as string | undefined,
+      productoId: req.query.productoId as string | undefined,
     });
     res.json(compras);
   } catch (err) {

@@ -601,6 +601,7 @@ interface FiltrosHistorialCompras {
   hasta?: string;
   proveedorId?: string;
   estadoPago?: string; // pendiente | parcial | pagada
+  productoId?: string;
 }
 
 // Semana calendario de lunes a domingo, "semanasAtras" semanas atras de
@@ -727,6 +728,7 @@ export async function listarHistorialCompras(filtros: FiltrosHistorialCompras) {
       fecha: { gte: inicio, lte: fin },
       ...(filtros.proveedorId ? { proveedorId: filtros.proveedorId } : {}),
       ...(filtros.estadoPago ? { estadoPago: filtros.estadoPago } : {}),
+      ...(filtros.productoId ? { lotes: { some: { variante: { productoId: filtros.productoId } } } } : {}),
     },
     include: {
       proveedor: true,
