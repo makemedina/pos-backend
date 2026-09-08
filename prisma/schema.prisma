@@ -248,6 +248,11 @@ model Cliente {
   ciudadEntrega        String?
   estadoEntrega        String?
   codigoPostalEntrega  String?
+  // Link al perfil/pin del negocio en Google Maps (o un Plus Code) --
+  // texto libre, se guarda tal cual lo pega el usuario para poder ubicar
+  // al cliente facilmente sin depender de que la direccion por partes
+  // este completa o sea exacta.
+  googleMapsUrl        String?
   notas               String?
   permiteVentaCredito Boolean  @default(true)
   // Saldo que el cliente ya debia ANTES de usar el sistema (cartera
