@@ -46,6 +46,7 @@ interface DireccionInput {
   estadoEntrega?: string;
   codigoPostalEntrega?: string;
   googleMapsUrl?: string;
+  notas?: string;
 }
 
 /** Alta completa desde la pantalla de Clientes (con domicilio opcional, separado por partes). */
@@ -68,6 +69,7 @@ export async function crearCliente(
       estadoEntrega: datos.estadoEntrega || undefined,
       codigoPostalEntrega: datos.codigoPostalEntrega || undefined,
       googleMapsUrl: datos.googleMapsUrl || undefined,
+      notas: datos.notas || undefined,
     },
   });
 }
@@ -246,6 +248,7 @@ export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sin
       estadoEntrega: c.estadoEntrega,
       codigoPostalEntrega: c.codigoPostalEntrega,
       googleMapsUrl: c.googleMapsUrl,
+      notas: c.notas,
       permiteVentaCredito: c.permiteVentaCredito,
       saldoInicial: Number(c.saldoInicial),
       saldoTotal: calcularSaldoTotal(c.ventas, c.saldoInicial),
@@ -281,6 +284,7 @@ export async function obtenerClienteDetalle(clienteId: string) {
     estadoEntrega: cliente.estadoEntrega,
     codigoPostalEntrega: cliente.codigoPostalEntrega,
     googleMapsUrl: cliente.googleMapsUrl,
+    notas: cliente.notas,
     permiteVentaCredito: cliente.permiteVentaCredito,
     saldoInicial: Number(cliente.saldoInicial),
     saldoTotal: calcularSaldoTotal(cliente.ventas, cliente.saldoInicial),

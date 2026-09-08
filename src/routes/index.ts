@@ -1373,8 +1373,9 @@ router.post('/clientes', async (req, res) => {
       estadoEntrega,
       codigoPostalEntrega,
       googleMapsUrl,
+      notas,
     } = req.body;
-    const tieneDatosExtra = calle || colonia || ciudad || estado || codigoPostal || nombreContacto || googleMapsUrl;
+    const tieneDatosExtra = calle || colonia || ciudad || estado || codigoPostal || nombreContacto || googleMapsUrl || notas;
     const cliente = tieneDatosExtra
       ? await crearCliente({
           nombre,
@@ -1391,6 +1392,7 @@ router.post('/clientes', async (req, res) => {
           estadoEntrega,
           codigoPostalEntrega,
           googleMapsUrl,
+          notas,
         })
       : await crearClienteRapido(nombre, telefono);
     res.status(201).json(cliente);
@@ -1466,6 +1468,7 @@ router.put('/clientes/:id', async (req, res) => {
       estadoEntrega,
       codigoPostalEntrega,
       googleMapsUrl,
+      notas,
       permiteVentaCredito,
     } = req.body;
     const datos: any = {
@@ -1483,6 +1486,7 @@ router.put('/clientes/:id', async (req, res) => {
       estadoEntrega,
       codigoPostalEntrega,
       googleMapsUrl,
+      notas,
     };
     // El switch de credito solo lo puede cambiar un administrador, sin
     // importar lo que venga en el body si quien llama no lo es.
