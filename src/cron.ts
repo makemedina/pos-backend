@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import { crearBackup, BackupNoConfiguradoError } from './services/backup.service';
 import { sugerirDiasCompraAutomaticamente } from './services/clientes.service';
+import { notificarPendientesDeHoy } from './services/push.service';
 
 /**
  * Respaldo automatico de toda la base de datos, todos los dias a
@@ -46,4 +47,19 @@ export function iniciarTareasProgramadas() {
       console.log(`[dias de llamada sugeridos] (arranque) ${clientesActualizados} cliente(s) actualizados`);
     })
     .catch((err) => console.error('[dias de llamada sugeridos] (arranque) Fallo:', err));
+
+  // Notificacion push de "pendientes" -- una vez en la mañana, para que
+  // se vea al empezar el dia en vez de a medianoche.
+  cron.schedule(
+    '0 8 * * *',
+    async () => {
+      try {
+        const { enviados } = await notificarPendientesDeHoy();
+        console.log(`[pendientes push] ${enviados} notificacion(es) enviada(s)`);
+      } catch (err) {
+        console.error('[pendientes push] Fallo:', err);
+      }
+    },
+    { timezone: 'America/Mazatlan' }
+  );
 }

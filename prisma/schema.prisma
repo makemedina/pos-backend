@@ -48,7 +48,22 @@ model Usuario {
   pagosCompraAutorizadosCancelacion PagoCompra[] @relation("AutorizaCancelacionPagoCompra")
   llamadasClienteRegistradas LlamadaCliente[]
   pendientesRegistrados Pendiente[]
+  suscripcionesPush  PushSubscription[]
   sesiones           Sesion[]
+}
+
+// Suscripcion a notificaciones push del navegador (Web Push/VAPID) de un
+// usuario en un dispositivo/navegador especifico -- un usuario puede
+// tener varias (celular + compu). "endpoint" es unico porque lo asigna
+// el navegador y ya identifica esa suscripcion sin ambiguedad.
+model PushSubscription {
+  id        String   @id @default(uuid())
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  creadoEn  DateTime @default(now())
 }
 
 // Sesion de acceso: se crea una fila nueva en cada login exitoso.

@@ -26,6 +26,11 @@ import {
   eliminarPendiente,
 } from '../services/pendientes.service';
 import {
+  obtenerVapidPublicKey,
+  guardarSuscripcionPush,
+  eliminarSuscripcionPush,
+} from '../services/push.service';
+import {
   buscarClientes,
   crearClienteRapido,
   crearCliente,
@@ -1607,6 +1612,38 @@ router.delete('/pendientes/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al eliminar el pendiente' });
+  }
+});
+
+router.get('/push/vapid-public-key', async (_req, res) => {
+  const key = obtenerVapidPublicKey();
+  if (!key) return res.status(503).json({ error: 'Las notificaciones push no estan configuradas' });
+  res.json({ publicKey: key });
+});
+
+router.post('/push/suscribirse', async (req, res) => {
+  try {
+    const { endpoint, keys } = req.body;
+    if (!endpoint || !keys?.p256dh || !keys?.auth) {
+      return res.status(400).json({ error: 'Suscripcion invalida' });
+    }
+    await guardarSuscripcionPush(req.usuario!.id, { endpoint, keys });
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudo guardar la suscripcion' });
+  }
+});
+
+router.post('/push/desuscribirse', async (req, res) => {
+  try {
+    const { endpoint } = req.body;
+    if (!endpoint) return res.status(400).json({ error: 'Falta el endpoint' });
+    await eliminarSuscripcionPush(endpoint);
+    res.status(204).send();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'No se pudo eliminar la suscripcion' });
   }
 });
 
