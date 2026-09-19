@@ -362,24 +362,22 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     })
     .sort((a, b) => b.fecha.localeCompare(a.fecha)); // mas reciente primero
 
-  const productosMasVendidosPorValorTop = Object.entries(productosMasVendidosPorValor)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
-  const mejoresClientesPorValorTop = Object.entries(mejoresClientesPorValor)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5);
+  // Se manda la lista COMPLETA ordenada (no solo un top-N) -- el frontend
+  // decide cuantos mostrar por default y ofrece "mostrar todos" sin tener
+  // que pedirle nada nuevo al servidor.
+  const productosMasVendidosPorValorTodos = Object.entries(productosMasVendidosPorValor).sort((a, b) => b[1] - a[1]);
+  const mejoresClientesPorValorTodos = Object.entries(mejoresClientesPorValor).sort((a, b) => b[1] - a[1]);
 
-  // Solo se arma el detalle de los productos/clientes que en realidad se
-  // muestran (el top 5 de cada lista) -- no hace falta mandar el
-  // desglose de todos si el frontend no los va a poder clickear.
+  // El detalle se arma para todos los productos/clientes, no solo los
+  // primeros -- al usar "mostrar todos" cualquiera debe poder clickearse.
   const detalleProductosPorValor = Object.fromEntries(
-    productosMasVendidosPorValorTop.map(([nombre]) => [
+    productosMasVendidosPorValorTodos.map(([nombre]) => [
       nombre,
       Object.entries(productoPorCliente[nombre] ?? {}).sort((a, b) => b[1] - a[1]),
     ])
   );
   const detalleClientesPorValor = Object.fromEntries(
-    mejoresClientesPorValorTop.map(([nombre]) => [
+    mejoresClientesPorValorTodos.map(([nombre]) => [
       nombre,
       Object.entries(clientePorProducto[nombre] ?? {}).sort((a, b) => b[1] - a[1]),
     ])
@@ -401,16 +399,12 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     ventasCantidad,
     ticketMedio,
     porcentajeEfectivo,
-    productosMasVendidos: Object.entries(productosMasVendidos)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5),
-    productosMasVendidosPorValor: productosMasVendidosPorValorTop,
-    mejoresClientesPorValor: mejoresClientesPorValorTop,
+    productosMasVendidos: Object.entries(productosMasVendidos).sort((a, b) => b[1] - a[1]),
+    productosMasVendidosPorValor: productosMasVendidosPorValorTodos,
+    mejoresClientesPorValor: mejoresClientesPorValorTodos,
     detalleProductosPorValor,
     detalleClientesPorValor,
-    ventasPorVendedor: Object.entries(ventasPorVendedor)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5),
+    ventasPorVendedor: Object.entries(ventasPorVendedor).sort((a, b) => b[1] - a[1]),
     detallePorDia,
   };
 }
