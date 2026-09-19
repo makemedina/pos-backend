@@ -3,6 +3,7 @@ import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente, SaldoBancoInsuficienteError } from './configuracion.service';
 import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
+import { recalcularCorteSiExiste } from './corte.service';
 
 const PREFIJO_COMPROBANTES = 'recibos-gastos/';
 
@@ -266,7 +267,12 @@ export async function crearGasto(input: {
       });
     }
 
-    return gasto;
+    // Si el gasto se registro con un dia pasado que ya tiene corte de
+    // caja guardado, ese corte quedaria con el gastosDia viejo para
+    // siempre si no se recalcula aqui mismo.
+    const corteRecalculado = input.fecha ? await recalcularCorteSiExiste(input.fecha, tx) : null;
+
+    return { gasto, corteRecalculado };
   });
 }
 
@@ -331,7 +337,7 @@ export async function cancelarGasto(
       });
     }
 
-    return tx.gasto.update({
+    const gasto = await tx.gasto.update({
       where: { id: gastoId },
       data: {
         cancelado: true,
@@ -341,6 +347,12 @@ export async function cancelarGasto(
       },
       include: { categoria: true, registradoPor: true, proveedor: true },
     });
+
+    // Cancelar excluye el gasto del gastosDia del dia -- si ese dia ya
+    // tiene corte guardado, se recalcula (ver recalcularCorteSiExiste).
+    const corteRecalculado = await recalcularCorteSiExiste(gastoActual.fecha, tx);
+
+    return { gasto, corteRecalculado };
   });
 }
 
@@ -416,7 +428,7 @@ export async function actualizarGasto(
       }
     }
 
-    return tx.gasto.update({
+    const gasto = await tx.gasto.update({
       where: { id: gastoId },
       data: {
         ...(cambios.categoriaId !== undefined ? { categoriaId: cambios.categoriaId } : {}),
@@ -428,5 +440,24 @@ export async function actualizarGasto(
       },
       include: { categoria: true, registradoPor: true, proveedor: true },
     });
+
+    // El monto, metodo de pago o dia del gasto pudieron cambiar -- si el
+    // dia nuevo (o el dia de donde salio, si se movio de fecha) ya tiene
+    // un corte de caja guardado, se recalcula para que no quede con
+    // numeros viejos. Sin esto, un corte ya cerrado nunca se entera de
+    // que uno de sus gastos cambio.
+    const fechaAnterior = actual.fecha;
+    const fechaNueva = gasto.fecha;
+    const cortesRecalculados: Date[] = [];
+    const recalculadoNuevo = await recalcularCorteSiExiste(fechaNueva, tx);
+    if (recalculadoNuevo) cortesRecalculados.push(recalculadoNuevo);
+    if (fechaNueva.getTime() !== fechaAnterior.getTime()) {
+      const recalculadoAnterior = await recalcularCorteSiExiste(fechaAnterior, tx);
+      if (recalculadoAnterior && !cortesRecalculados.some((f) => f.getTime() === recalculadoAnterior.getTime())) {
+        cortesRecalculados.push(recalculadoAnterior);
+      }
+    }
+
+    return { gasto, cortesRecalculados };
   });
 }

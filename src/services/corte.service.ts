@@ -1,5 +1,8 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { movimientosInventario } from './inventario.service';
+
+type ClientePrisma = typeof prisma | Prisma.TransactionClient;
 
 export class CorteYaExisteError extends Error {
   constructor() {
@@ -121,13 +124,13 @@ function sumaPagosPorMetodo(pagos: { metodoPago: string; monto: unknown }[], met
  * operativos de un dia especifico. Se usa tanto para la vista previa
  * del corte como para la fotografia que se guarda al cerrarlo.
  */
-async function utilidadYGastosDelDia(inicioDia: Date, finDia: Date) {
+async function utilidadYGastosDelDia(inicioDia: Date, finDia: Date, cliente: ClientePrisma = prisma) {
   const [ventasHoy, gastosHoy] = await Promise.all([
-    prisma.venta.findMany({
+    cliente.venta.findMany({
       where: { fecha: { gte: inicioDia, lte: finDia }, cancelada: false },
       include: { items: true },
     }),
-    prisma.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: finDia }, cancelado: false } }),
+    cliente.gasto.findMany({ where: { fecha: { gte: inicioDia, lte: finDia }, cancelado: false } }),
   ]);
 
   const utilidadDia = ventasHoy.reduce((acc, v) => {
@@ -142,6 +145,55 @@ async function utilidadYGastosDelDia(inicioDia: Date, finDia: Date) {
   const gastosDia = gastosHoy.reduce((acc, g) => acc + Number(g.monto), 0);
 
   return { utilidadDia, gastosDia };
+}
+
+/**
+ * Si ya existe un corte de caja guardado que cubre la fecha dada, recalcula
+ * su gastosDia/utilidadDia con los datos actuales y lo actualiza -- para
+ * que crear, editar o cancelar un gasto con fecha pasada no deje "chueco"
+ * para siempre un corte que ya se habia cerrado antes del cambio (el
+ * gastosDia guardado en el corte es una fotografia congelada, no se
+ * recalcula solo).
+ *
+ * El corte que "cubre" una fecha es el primero con fecha >= esa fecha (no
+ * necesariamente el mismo dia: si se saltaron dias sin cerrar, un solo
+ * corte cubre todo ese hueco -- ver corteDelDia/guardarCorteCaja).
+ *
+ * Se le puede pasar el cliente de una transaccion (tx) para que el
+ * recalculo quede atomico junto con el cambio del gasto que lo dispara.
+ * Regresa la fecha del corte recalculado, o null si esa fecha todavia no
+ * tiene corte guardado (nada que corregir: la vista previa de un corte
+ * sin guardar ya lee los gastos en vivo).
+ */
+export async function recalcularCorteSiExiste(fecha: Date, cliente: ClientePrisma = prisma): Promise<Date | null> {
+  const dia = normalizarFecha(fecha);
+  const corte = await cliente.corteCaja.findFirst({
+    where: { fecha: { gte: dia } },
+    orderBy: { fecha: 'asc' },
+  });
+  if (!corte) return null;
+
+  const corteAnterior = await cliente.corteCaja.findFirst({
+    where: { fecha: { lt: corte.fecha } },
+    orderBy: { fecha: 'desc' },
+  });
+  const desde = corteAnterior
+    ? (() => {
+        const d = new Date(corteAnterior.fecha);
+        d.setDate(d.getDate() + 1);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      })()
+    : corte.fecha;
+
+  const { utilidadDia, gastosDia } = await utilidadYGastosDelDia(desde, finDelDia(corte.fecha), cliente);
+
+  await cliente.corteCaja.update({
+    where: { id: corte.id },
+    data: { utilidadDia, gastosDia },
+  });
+
+  return corte.fecha;
 }
 
 /** Valor del inventario disponible, a costo (cantidad disponible x costo del lote). */

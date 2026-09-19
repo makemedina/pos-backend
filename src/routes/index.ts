@@ -463,7 +463,7 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
     // que se aplica el gasto) -- a cualquier otro usuario se le ignora
     // ese campo aunque lo mande, y el gasto queda con la fecha de hoy.
     const esAdmin = req.usuario!.rolBase === 'administrador';
-    const gasto = await crearGasto({
+    const { gasto, corteRecalculado } = await crearGasto({
       categoriaId: req.body.categoriaId,
       proveedorId: req.body.proveedorId || undefined,
       concepto: req.body.concepto,
@@ -473,7 +473,7 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
       fotoComprobanteKey,
       ...(esAdmin && req.body.fecha ? { fecha: fechaLocalDesdeString(req.body.fecha) } : {}),
     });
-    res.status(201).json(gasto);
+    res.status(201).json({ ...gasto, corteRecalculado });
   } catch (err) {
     if (err instanceof SaldoBancoInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
@@ -522,7 +522,7 @@ router.get('/gastos/:id/comprobante', async (req, res) => {
 router.put('/gastos/:id', requiereAdmin, async (req, res) => {
   try {
     const { categoriaId, proveedorId, concepto, monto, metodoPago, fecha } = req.body || {};
-    const gasto = await actualizarGasto(req.params.id, {
+    const { gasto, cortesRecalculados } = await actualizarGasto(req.params.id, {
       ...(categoriaId !== undefined ? { categoriaId } : {}),
       ...(proveedorId !== undefined ? { proveedorId: proveedorId || null } : {}),
       ...(concepto !== undefined ? { concepto } : {}),
@@ -530,7 +530,7 @@ router.put('/gastos/:id', requiereAdmin, async (req, res) => {
       ...(metodoPago !== undefined ? { metodoPago } : {}),
       ...(fecha !== undefined ? { fecha: fechaLocalDesdeString(fecha) } : {}),
     });
-    res.json(gasto);
+    res.json({ ...gasto, cortesRecalculados });
   } catch (err) {
     if (err instanceof GastoYaCanceladoError) {
       return res.status(409).json({ error: err.message, code: 'GASTO_YA_CANCELADO' });
@@ -546,12 +546,12 @@ router.put('/gastos/:id', requiereAdmin, async (req, res) => {
 router.post('/gastos/:id/cancelar', async (req, res) => {
   try {
     const { telefono, pin } = req.body || {};
-    const gasto = await cancelarGasto(
+    const { gasto, corteRecalculado } = await cancelarGasto(
       req.params.id,
       req.usuario!.id,
       telefono && pin ? { telefono, pin } : undefined
     );
-    res.json(gasto);
+    res.json({ ...gasto, corteRecalculado });
   } catch (err) {
     if (err instanceof GastoYaCanceladoError) {
       return res.status(409).json({ error: err.message, code: 'GASTO_YA_CANCELADO' });
