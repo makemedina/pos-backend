@@ -1,6 +1,6 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
-import { verificarSaldoBancoSuficiente } from './configuracion.service';
+import { verificarSaldoBancoSuficiente, SaldoBancoInsuficienteError } from './configuracion.service';
 import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 
@@ -237,6 +237,10 @@ export async function crearGasto(input: {
   monto: number;
   metodoPago: string;
   fotoComprobanteKey: string;
+  // Solo el administrador puede elegir un dia distinto de hoy para el
+  // gasto (ver validacion en la ruta) -- si no se manda, aplica hoy
+  // (default(now()) del modelo).
+  fecha?: Date;
 }) {
   return prisma.$transaction(async (tx) => {
     if (input.metodoPago === 'transferencia') {
@@ -334,6 +338,93 @@ export async function cancelarGasto(
         canceladoEn: new Date(),
         canceladoPorId: solicitadoPorId,
         autorizadoPorId,
+      },
+      include: { categoria: true, registradoPor: true, proveedor: true },
+    });
+  });
+}
+
+/**
+ * Edita un gasto ya registrado (solo administrador, ver ruta). Si cambia
+ * el monto o el metodo de pago, revierte el efecto que tuvo el monto
+ * anterior sobre el saldo de caja/banco y aplica el nuevo -- si no, los
+ * saldos quedarian descuadrados (el gasto original ya se habia
+ * descontado al crearlo).
+ */
+export async function actualizarGasto(
+  gastoId: string,
+  cambios: {
+    categoriaId?: string;
+    proveedorId?: string | null;
+    concepto?: string;
+    monto?: number;
+    metodoPago?: string;
+    fecha?: Date;
+  }
+) {
+  return prisma.$transaction(async (tx) => {
+    const actual = await tx.gasto.findUniqueOrThrow({ where: { id: gastoId } });
+    if (actual.cancelado) {
+      throw new GastoYaCanceladoError();
+    }
+
+    const montoAnterior = Number(actual.monto);
+    const montoNuevo = cambios.monto ?? montoAnterior;
+    const metodoNuevo = cambios.metodoPago ?? actual.metodoPago;
+    const cambioAfectaSaldos = montoNuevo !== montoAnterior || metodoNuevo !== actual.metodoPago;
+
+    if (cambioAfectaSaldos) {
+      if (metodoNuevo === 'transferencia') {
+        // El saldo de banco ya trae descontado el monto anterior si el
+        // metodo anterior tambien era transferencia -- se lo regresamos
+        // antes de validar, para no rechazar un ajuste que en realidad
+        // no aumenta lo comprometido.
+        const saldoDisponible =
+          Number((await tx.configuracion.findUnique({ where: { id: 'singleton' } }))?.saldoBancoActual ?? 0) +
+          (actual.metodoPago === 'transferencia' ? montoAnterior : 0);
+        if (montoNuevo > saldoDisponible) {
+          throw new SaldoBancoInsuficienteError(montoNuevo, saldoDisponible);
+        }
+      }
+
+      if (actual.metodoPago === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { increment: montoAnterior } },
+          create: { id: 'singleton', saldoBancoActual: montoAnterior },
+        });
+      } else if (actual.metodoPago === 'efectivo') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoEfectivoActual: { increment: montoAnterior } },
+          create: { id: 'singleton', saldoEfectivoActual: montoAnterior },
+        });
+      }
+
+      if (metodoNuevo === 'transferencia') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoBancoActual: { decrement: montoNuevo } },
+          create: { id: 'singleton', saldoBancoActual: -montoNuevo },
+        });
+      } else if (metodoNuevo === 'efectivo') {
+        await tx.configuracion.upsert({
+          where: { id: 'singleton' },
+          update: { saldoEfectivoActual: { decrement: montoNuevo } },
+          create: { id: 'singleton', saldoEfectivoActual: -montoNuevo },
+        });
+      }
+    }
+
+    return tx.gasto.update({
+      where: { id: gastoId },
+      data: {
+        ...(cambios.categoriaId !== undefined ? { categoriaId: cambios.categoriaId } : {}),
+        ...(cambios.proveedorId !== undefined ? { proveedorId: cambios.proveedorId || null } : {}),
+        ...(cambios.concepto !== undefined ? { concepto: cambios.concepto } : {}),
+        ...(cambios.monto !== undefined ? { monto: cambios.monto } : {}),
+        ...(cambios.metodoPago !== undefined ? { metodoPago: cambios.metodoPago } : {}),
+        ...(cambios.fecha !== undefined ? { fecha: cambios.fecha } : {}),
       },
       include: { categoria: true, registradoPor: true, proveedor: true },
     });

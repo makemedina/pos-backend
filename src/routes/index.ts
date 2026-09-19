@@ -79,6 +79,7 @@ import multer from 'multer';
 import {
   crearCategoriaGasto,
   crearGasto,
+  actualizarGasto,
   listarCategoriasGasto,
   listarGastos,
   cancelarGasto,
@@ -458,6 +459,10 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
     }
     const fotoComprobanteKey = await subirFotoComprobanteGasto(req.file.buffer, req.file.mimetype);
     // registradoPorId ya no viene del body: siempre es quien esta logueado.
+    // Solo el administrador puede elegir un dia distinto de hoy (fecha en
+    // que se aplica el gasto) -- a cualquier otro usuario se le ignora
+    // ese campo aunque lo mande, y el gasto queda con la fecha de hoy.
+    const esAdmin = req.usuario!.rolBase === 'administrador';
     const gasto = await crearGasto({
       categoriaId: req.body.categoriaId,
       proveedorId: req.body.proveedorId || undefined,
@@ -466,6 +471,7 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
       metodoPago: req.body.metodoPago,
       registradoPorId: req.usuario!.id,
       fotoComprobanteKey,
+      ...(esAdmin && req.body.fecha ? { fecha: fechaLocalDesdeString(req.body.fecha) } : {}),
     });
     res.status(201).json(gasto);
   } catch (err) {
@@ -507,6 +513,33 @@ router.get('/gastos/:id/comprobante', async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: 'Error al obtener el comprobante' });
+  }
+});
+
+// Editar un gasto ya registrado (concepto, monto, categoria, proveedor,
+// metodo de pago y/o la fecha en que se aplica) es solo para
+// administradores -- cualquier otro usuario solo puede cancelarlo.
+router.put('/gastos/:id', requiereAdmin, async (req, res) => {
+  try {
+    const { categoriaId, proveedorId, concepto, monto, metodoPago, fecha } = req.body || {};
+    const gasto = await actualizarGasto(req.params.id, {
+      ...(categoriaId !== undefined ? { categoriaId } : {}),
+      ...(proveedorId !== undefined ? { proveedorId: proveedorId || null } : {}),
+      ...(concepto !== undefined ? { concepto } : {}),
+      ...(monto !== undefined ? { monto: Number(monto) } : {}),
+      ...(metodoPago !== undefined ? { metodoPago } : {}),
+      ...(fecha !== undefined ? { fecha: fechaLocalDesdeString(fecha) } : {}),
+    });
+    res.json(gasto);
+  } catch (err) {
+    if (err instanceof GastoYaCanceladoError) {
+      return res.status(409).json({ error: err.message, code: 'GASTO_YA_CANCELADO' });
+    }
+    if (err instanceof SaldoBancoInsuficienteError) {
+      return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al editar el gasto' });
   }
 });
 
