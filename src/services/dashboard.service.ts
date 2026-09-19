@@ -267,17 +267,24 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
   // precioUnitario) que ya usa productosMasVendidosPorValor.
   const productoPorCliente: Record<string, Record<string, number>> = {};
   const clientePorProducto: Record<string, Record<string, number>> = {};
+  // Mismo desglose que clientePorProducto, pero en kg en vez de valor --
+  // para la pestaña "por volumen" del detalle de un cliente.
+  const clientePorProductoVolumen: Record<string, Record<string, number>> = {};
   for (const venta of ventas) {
     const nombreCliente = venta.cliente.nombre;
     for (const item of venta.items) {
       const nombreProducto = item.lote.variante.producto.nombre;
-      const subtotal = Number(item.cantidad) * Number(item.precioUnitario);
+      const cantidad = Number(item.cantidad);
+      const subtotal = cantidad * Number(item.precioUnitario);
 
       (productoPorCliente[nombreProducto] ??= {})[nombreCliente] =
         (productoPorCliente[nombreProducto]?.[nombreCliente] || 0) + subtotal;
 
       (clientePorProducto[nombreCliente] ??= {})[nombreProducto] =
         (clientePorProducto[nombreCliente]?.[nombreProducto] || 0) + subtotal;
+
+      (clientePorProductoVolumen[nombreCliente] ??= {})[nombreProducto] =
+        (clientePorProductoVolumen[nombreCliente]?.[nombreProducto] || 0) + cantidad;
     }
   }
 
@@ -382,6 +389,12 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
       Object.entries(clientePorProducto[nombre] ?? {}).sort((a, b) => b[1] - a[1]),
     ])
   );
+  const detalleClientesPorVolumen = Object.fromEntries(
+    mejoresClientesPorValorTodos.map(([nombre]) => [
+      nombre,
+      Object.entries(clientePorProductoVolumen[nombre] ?? {}).sort((a, b) => b[1] - a[1]),
+    ])
+  );
 
   return {
     totalVentas,
@@ -404,6 +417,7 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     mejoresClientesPorValor: mejoresClientesPorValorTodos,
     detalleProductosPorValor,
     detalleClientesPorValor,
+    detalleClientesPorVolumen,
     ventasPorVendedor: Object.entries(ventasPorVendedor).sort((a, b) => b[1] - a[1]),
     detallePorDia,
   };
