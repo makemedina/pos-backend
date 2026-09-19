@@ -13,7 +13,7 @@ import {
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, pagosProveedorAgrupados, cancelarGrupoPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError } from '../services/compras.service';
-import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
+import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, obtenerAjustePorId, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
@@ -1248,6 +1248,16 @@ router.post('/inventario/ajustes', async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el ajuste' });
+  }
+});
+
+router.get('/inventario/ajustes/:id', requierePermiso('puedeVerCostos'), async (req, res) => {
+  try {
+    const ajuste = await obtenerAjustePorId(req.params.id);
+    res.json(ajuste);
+  } catch (err) {
+    console.error(err);
+    res.status(404).json({ error: 'Ajuste no encontrado' });
   }
 });
 

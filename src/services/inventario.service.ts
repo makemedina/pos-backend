@@ -49,6 +49,31 @@ export async function lotesDeVariante(varianteId: string) {
   }));
 }
 
+/** Detalle de un solo ajuste (merma/correccion), para abrirlo desde el reporte de movimientos. */
+export async function obtenerAjustePorId(id: string) {
+  const a = await prisma.ajusteInventario.findUniqueOrThrow({
+    where: { id },
+    include: {
+      lote: { include: { variante: { include: { producto: true } } } },
+      solicitadoPor: true,
+      autorizadoPor: true,
+    },
+  });
+
+  return {
+    id: a.id,
+    tipo: a.tipo as 'merma' | 'correccion_positiva' | 'correccion_negativa',
+    fecha: a.fecha,
+    producto: a.lote.variante.producto.nombre,
+    marca: a.lote.variante.marca,
+    cantidad: Number(a.cantidad),
+    motivo: a.motivo,
+    impactoUtilidad: Number(a.impactoUtilidad),
+    solicitadoPor: a.solicitadoPor.nombre,
+    autorizadoPor: a.autorizadoPor?.nombre ?? null,
+  };
+}
+
 export class StockInsuficienteParaAjusteError extends Error {
   constructor(disponible: number, solicitado: number) {
     super(`No se puede dar de baja ${solicitado}kg: el lote solo tiene ${disponible}kg disponibles`);
@@ -273,6 +298,12 @@ export interface MovimientoInventarioDetalle {
   cantidad: number; // positivo = suma al inventario, negativo = resta
   valor: number;    // mismo signo que cantidad, a costo
   referencia: string;
+  // Id de la compra/venta/ajuste de origen -- para poder abrir ese
+  // movimiento en su propio detalle (CompraDetalleModal, VentaDetalleModal
+  // o AjusteDetalleModal segun el tipo). Es distinto de "id" arriba (el id
+  // del lote o del item de venta, unico por renglon) porque una sola
+  // compra o venta puede generar varios de estos renglones.
+  idReferencia: string;
 }
 
 /**
@@ -323,6 +354,7 @@ export async function detalleMovimientosInventario(filtros: FiltrosMovimientosDe
       cantidad: Number(l.cantidadInicial),
       valor: Number(l.cantidadInicial) * Number(l.costoUnitario),
       referencia: `Compra a ${l.compra.proveedor.nombre}`,
+      idReferencia: l.compraId,
     })),
     ...ventas.map((v) => ({
       tipo: 'salida' as const,
@@ -333,6 +365,7 @@ export async function detalleMovimientosInventario(filtros: FiltrosMovimientosDe
       cantidad: -Number(v.cantidad),
       valor: -(Number(v.cantidad) * Number(v.costoUnitarioSnapshot)),
       referencia: `Venta #${v.venta.folio} - ${v.venta.cliente.nombre}`,
+      idReferencia: v.ventaId,
     })),
     ...ajustes.map((a) => {
       const esSalida = a.tipo === 'merma' || a.tipo === 'correccion_negativa';
@@ -345,6 +378,7 @@ export async function detalleMovimientosInventario(filtros: FiltrosMovimientosDe
         cantidad: (esSalida ? -1 : 1) * Number(a.cantidad),
         valor: Number(a.impactoUtilidad),
         referencia: a.motivo,
+        idReferencia: a.id,
       };
     }),
   ].sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime());
