@@ -433,6 +433,10 @@ model PagoVenta {
   // comprobante COMPLETO tal como se genero la primera vez, en vez de
   // solo la parte de una nota individual.
   grupoPagoId    String?
+  // Obligatoria cuando metodoPago es transferencia (ver validacion en
+  // cartera.service.ts) -- foto del comprobante de la transferencia,
+  // mismo patron que Gasto.fotoComprobanteKey.
+  fotoComprobanteKey String?
 
   asignaciones PagoAsignacion[]
 
@@ -512,6 +516,9 @@ model DepositoBanco {
   id              String    @id @default(uuid())
   monto           Decimal   @db.Decimal(12, 2)
   notas           String?
+  // Siempre obligatoria (ver validacion en la ruta) -- foto del
+  // comprobante del deposito, mismo patron que Gasto.fotoComprobanteKey.
+  fotoComprobanteKey String?
   fecha           DateTime  @default(now())
   registradoPorId String
   registradoPor   Usuario   @relation("RegistraDeposito", fields: [registradoPorId], references: [id])

@@ -1,5 +1,16 @@
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
+import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
+
+const PREFIJO_COMPROBANTES_DEPOSITO = 'comprobantes-depositos/';
+
+export async function subirFotoComprobanteDeposito(buffer: Buffer, contentType: string): Promise<string> {
+  return subirImagenR2(buffer, contentType, PREFIJO_COMPROBANTES_DEPOSITO);
+}
+
+export async function descargarFotoComprobanteDeposito(key: string) {
+  return descargarImagenR2(key);
+}
 
 export class MontoDepositoInvalidoError extends Error {}
 
@@ -30,14 +41,19 @@ function esMismoDia(fecha: Date, referencia: Date) {
  * mueve el saldo de efectivo a banco para que el Corte de Caja siga
  * cuadrando.
  */
-export async function registrarDeposito(monto: number, notas: string | undefined, registradoPorId: string) {
+export async function registrarDeposito(
+  monto: number,
+  notas: string | undefined,
+  registradoPorId: string,
+  fotoComprobanteKey: string
+) {
   if (!monto || monto <= 0) {
     throw new MontoDepositoInvalidoError('El monto del deposito debe ser mayor a cero');
   }
 
   return prisma.$transaction(async (tx) => {
     const deposito = await tx.depositoBanco.create({
-      data: { monto, notas, registradoPorId },
+      data: { monto, notas, registradoPorId, fotoComprobanteKey },
       include: { registradoPor: true },
     });
 
@@ -52,6 +68,22 @@ export async function registrarDeposito(monto: number, notas: string | undefined
 
     return deposito;
   });
+}
+
+export async function obtenerDepositoPorId(id: string) {
+  return prisma.depositoBanco.findUniqueOrThrow({ where: { id } });
+}
+
+/** Mismo criterio que listarDepositos: solo el dueno del deposito o quien puede ver los de todos. */
+export function puedeVerDeposito(
+  deposito: { registradoPorId: string },
+  usuario: { id: string; rolBase: string; permisos: { puedeVerGastosTodos: boolean } | null }
+) {
+  return (
+    usuario.rolBase === 'administrador' ||
+    !!usuario.permisos?.puedeVerGastosTodos ||
+    deposito.registradoPorId === usuario.id
+  );
 }
 
 /**

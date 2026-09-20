@@ -559,6 +559,7 @@ export async function corteDelDia(
       cantidad: pagosClientesHoy.length,
       detalle: pagosClientesOrdenados.map((p) => ({
         id: p.id,
+        ventaId: p.ventaId,
         folio: p.venta.folio,
         cliente: p.venta.cliente.nombre,
         monto: Number(p.monto),
@@ -574,6 +575,7 @@ export async function corteDelDia(
       cantidad: pagosProveedoresHoy.length,
       detalle: pagosProveedoresHoy.map((p) => ({
         id: p.id,
+        compraId: p.compraId,
         proveedor: p.compra.proveedor.nombre,
         numeroFactura: p.compra.numeroFactura,
         monto: Number(p.monto),

@@ -70,10 +70,14 @@ import {
   pagosClienteAgrupados,
   cancelarGrupoPago,
   obtenerComprobantePagoPorGrupo,
+  obtenerPagoVentaPorId,
+  subirFotoComprobantePago,
+  descargarFotoComprobantePago,
   MontoPagoInvalidoError,
   PagoYaCanceladoError,
   AutorizacionCancelacionPagoInvalidaError,
   ComprobantePagoNoEncontradoError,
+  ComprobantePagoRequeridoError,
 } from '../services/cartera.service';
 import multer from 'multer';
 import {
@@ -93,7 +97,7 @@ import {
 import { TipoFotoInvalidoError } from '../services/imagenesR2.service';
 
 const subidaComprobante = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
-import { registrarDeposito, listarDepositos, cancelarDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
+import { registrarDeposito, listarDepositos, cancelarDeposito, obtenerDepositoPorId, puedeVerDeposito, subirFotoComprobanteDeposito, descargarFotoComprobanteDeposito, MontoDepositoInvalidoError, DepositoYaCanceladoError, AutorizacionCancelacionDepositoInvalidaError } from '../services/depositos.service';
 import {
   crearCotizacion,
   listarCotizacionesPendientes,
@@ -576,16 +580,56 @@ router.get('/depositos', async (req, res) => {
   }
 });
 
-router.post('/depositos', async (req, res) => {
+// multipart/form-data: la foto del comprobante es SIEMPRE obligatoria
+// para un deposito (a diferencia de gastos/pagos, aqui no depende de un
+// metodo de pago -- todo deposito es un traspaso a banco).
+router.post('/depositos', subidaComprobante.single('foto'), async (req, res) => {
   try {
-    const deposito = await registrarDeposito(Number(req.body.monto), req.body.notas, req.usuario!.id);
+    if (!req.file) {
+      return res.status(400).json({ error: 'Falta la foto del comprobante del depósito.', code: 'FOTO_REQUERIDA' });
+    }
+    const fotoComprobanteKey = await subirFotoComprobanteDeposito(req.file.buffer, req.file.mimetype);
+    const deposito = await registrarDeposito(Number(req.body.monto), req.body.notas, req.usuario!.id, fotoComprobanteKey);
     res.status(201).json(deposito);
   } catch (err) {
     if (err instanceof MontoDepositoInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
     }
+    if (err instanceof TipoFotoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
+    }
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el deposito' });
+  }
+});
+
+router.get('/depositos/:id/comprobante', async (req, res) => {
+  try {
+    const deposito = await obtenerDepositoPorId(req.params.id);
+    if (!puedeVerDeposito(deposito, req.usuario!)) {
+      return res.status(403).json({ error: 'No tienes permiso para ver este comprobante.' });
+    }
+    if (!deposito.fotoComprobanteKey) {
+      return res.status(404).json({ error: 'Este depósito no tiene foto de comprobante.' });
+    }
+    const { cuerpo, contentType } = await descargarFotoComprobanteDeposito(deposito.fotoComprobanteKey);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    (cuerpo as any).pipe(res);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener el comprobante' });
   }
 });
 
@@ -1796,21 +1840,36 @@ router.get('/cartera/clientes/:clienteId/notas', requierePermiso('puedeVerCarter
   }
 });
 
-router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
+// multipart/form-data: "asignaciones"/"pagos" viajan como texto JSON, mas
+// un archivo "foto" opcional -- solo obligatorio si alguno de los pagos
+// es por transferencia (ver registrarPagoMultiNota).
+router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistrarPagos'), subidaComprobante.single('foto'), async (req, res) => {
   try {
-    const { asignaciones, metodoPago, pagos } = req.body;
-    if (!Array.isArray(asignaciones) || asignaciones.length === 0) {
+    const asignacionesCrudo = typeof req.body.asignaciones === 'string' ? JSON.parse(req.body.asignaciones) : req.body.asignaciones;
+    const pagosCrudo = typeof req.body.pagos === 'string' ? JSON.parse(req.body.pagos) : req.body.pagos;
+    const { metodoPago } = req.body;
+    if (!Array.isArray(asignacionesCrudo) || asignacionesCrudo.length === 0) {
       return res.status(400).json({ error: 'Debes enviar al menos una asignacion de pago', code: 'MONTO_INVALIDO' });
     }
-    const asignacionesNormalizadas = asignaciones.map((a: any) => ({
+    const asignacionesNormalizadas = asignacionesCrudo.map((a: any) => ({
       ventaId: String(a.ventaId),
       monto: Number(a.monto),
     }));
     // Compatibilidad: acepta tanto {metodoPago} (un solo metodo para todo
     // el pago) como {pagos: [{monto, metodoPago}, ...]} (repartido).
-    const pagosNormalizados = Array.isArray(pagos)
-      ? pagos.map((p: any) => ({ monto: Number(p.monto), metodoPago: p.metodoPago }))
+    const pagosNormalizados: { monto: number; metodoPago: string; fotoComprobanteKey?: string }[] = Array.isArray(pagosCrudo)
+      ? pagosCrudo.map((p: any) => ({ monto: Number(p.monto), metodoPago: p.metodoPago }))
       : [{ monto: asignacionesNormalizadas.reduce((acc, a) => acc + a.monto, 0), metodoPago }];
+
+    // Ver comentario equivalente en POST /ventas/:id/pagos -- no subir si
+    // ningun pago repartido en realidad es por transferencia.
+    if (req.file && pagosNormalizados.some((p) => p.metodoPago === 'transferencia' && p.monto > 0)) {
+      const fotoComprobanteKey = await subirFotoComprobantePago(req.file.buffer, req.file.mimetype);
+      for (const p of pagosNormalizados) {
+        if (p.metodoPago === 'transferencia') p.fotoComprobanteKey = fotoComprobanteKey;
+      }
+    }
+
     const resultado = await registrarPagoMultiNota(
       req.params.clienteId,
       asignacionesNormalizadas,
@@ -1824,6 +1883,18 @@ router.post('/cartera/clientes/:clienteId/pagos', requierePermiso('puedeRegistra
     }
     if (err instanceof SaldoAFavorInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'SALDO_A_FAVOR_INSUFICIENTE' });
+    }
+    if (err instanceof ComprobantePagoRequeridoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_REQUERIDA' });
+    }
+    if (err instanceof TipoFotoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
+    }
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
     }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago repartido entre notas' });
@@ -1884,13 +1955,30 @@ router.get('/ventas/:id/pagos', requierePermiso('puedeVerCarteraGeneral'), async
   }
 });
 
-router.post('/ventas/:id/pagos', requierePermiso('puedeRegistrarPagos'), async (req, res) => {
+// multipart/form-data: "pagos" viaja como texto JSON (multer no parsea
+// JSON en el body), mas un archivo "foto" opcional -- solo obligatorio
+// si alguno de los pagos es por transferencia (ver registrarPagoVenta).
+router.post('/ventas/:id/pagos', requierePermiso('puedeRegistrarPagos'), subidaComprobante.single('foto'), async (req, res) => {
   try {
     // Compatibilidad: acepta tanto {monto, metodoPago} (un solo metodo)
-    // como {pagos: [{monto, metodoPago}, ...]} (repartido en varios).
-    const pagos = Array.isArray(req.body.pagos)
-      ? req.body.pagos.map((p: any) => ({ monto: Number(p.monto), metodoPago: p.metodoPago }))
+    // como {pagos: [{monto, metodoPago}, ...]} (repartido en varios), y
+    // "pagos" como JSON ya parseado (fetch normal) o como string (FormData).
+    const pagosCrudo = typeof req.body.pagos === 'string' ? JSON.parse(req.body.pagos) : req.body.pagos;
+    const pagos: { monto: number; metodoPago: string; fotoComprobanteKey?: string }[] = Array.isArray(pagosCrudo)
+      ? pagosCrudo.map((p: any) => ({ monto: Number(p.monto), metodoPago: p.metodoPago }))
       : [{ monto: Number(req.body.monto), metodoPago: req.body.metodoPago }];
+
+    // Solo se sube la foto si en verdad hace falta -- un archivo que haya
+    // quedado seleccionado en el formulario de una transferencia que
+    // luego se puso en $0 no debe subirse ni bloquear un pago 100% en
+    // efectivo (ni gastar una subida a R2 de balde).
+    if (req.file && pagos.some((p) => p.metodoPago === 'transferencia' && p.monto > 0)) {
+      const fotoComprobanteKey = await subirFotoComprobantePago(req.file.buffer, req.file.mimetype);
+      for (const p of pagos) {
+        if (p.metodoPago === 'transferencia') p.fotoComprobanteKey = fotoComprobanteKey;
+      }
+    }
+
     const pago = await registrarPagoVenta(req.params.id, pagos, req.usuario!.id);
     res.status(201).json(pago);
   } catch (err) {
@@ -1900,8 +1988,41 @@ router.post('/ventas/:id/pagos', requierePermiso('puedeRegistrarPagos'), async (
     if (err instanceof SaldoAFavorInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'SALDO_A_FAVOR_INSUFICIENTE' });
     }
+    if (err instanceof ComprobantePagoRequeridoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_REQUERIDA' });
+    }
+    if (err instanceof TipoFotoInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
+    }
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al registrar el pago de la venta' });
+  }
+});
+
+router.get('/ventas/pagos/:pagoId/comprobante', requierePermiso('puedeVerCarteraGeneral'), async (req, res) => {
+  try {
+    const pago = await obtenerPagoVentaPorId(req.params.pagoId);
+    if (!pago.fotoComprobanteKey) {
+      return res.status(404).json({ error: 'Este pago no tiene foto de comprobante.' });
+    }
+    const { cuerpo, contentType } = await descargarFotoComprobantePago(pago.fotoComprobanteKey);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    (cuerpo as any).pipe(res);
+  } catch (err) {
+    if (err instanceof BackupNoConfiguradoError) {
+      return res.status(500).json({
+        error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+        code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+      });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener el comprobante' });
   }
 });
 

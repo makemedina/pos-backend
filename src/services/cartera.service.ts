@@ -4,8 +4,25 @@ import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { consumirSaldoAFavor } from './saldoAFavor.service';
 import { redondearCentavos } from '../utils/dinero';
+import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
+
+const PREFIJO_COMPROBANTES_PAGO = 'comprobantes-pagos/';
+
+export async function subirFotoComprobantePago(buffer: Buffer, contentType: string): Promise<string> {
+  return subirImagenR2(buffer, contentType, PREFIJO_COMPROBANTES_PAGO);
+}
+
+export async function descargarFotoComprobantePago(key: string) {
+  return descargarImagenR2(key);
+}
 
 export class MontoPagoInvalidoError extends Error {}
+
+export class ComprobantePagoRequeridoError extends Error {
+  constructor() {
+    super('Los abonos por transferencia necesitan la foto del comprobante.');
+  }
+}
 
 export class PagoYaCanceladoError extends Error {
   constructor() {
@@ -127,6 +144,10 @@ export async function notasClienteCredito(clienteId: string, incluirPagadas: boo
 }
 
 /** Nivel 3 de Cartera: historial de pagos/abonos de una nota especifica. */
+export async function obtenerPagoVentaPorId(pagoId: string) {
+  return prisma.pagoVenta.findUniqueOrThrow({ where: { id: pagoId } });
+}
+
 export async function pagosVenta(ventaId: string) {
   const pagos = await prisma.pagoVenta.findMany({
     where: { ventaId },
@@ -143,6 +164,7 @@ export async function pagosVenta(ventaId: string) {
     canceladoEn: p.canceladoEn,
     registradoPor: { nombre: p.registradoPor?.nombre ?? 'Registro anterior' },
     grupoPagoId: p.grupoPagoId,
+    fotoComprobanteKey: p.fotoComprobanteKey,
   }));
 }
 
@@ -383,7 +405,8 @@ async function aplicarPagoVenta(
   metodoPago: string,
   registradoPorId: string,
   clienteIdEsperado?: string,
-  grupoPagoId?: string
+  grupoPagoId?: string,
+  fotoComprobanteKey?: string
 ) {
   if (!monto || monto <= 0) {
     throw new MontoPagoInvalidoError('El monto del pago debe ser mayor a cero');
@@ -424,7 +447,7 @@ async function aplicarPagoVenta(
   const totalRestante = restantePorItem.reduce((acc, i) => acc + i.restante, 0);
 
   const pago = await tx.pagoVenta.create({
-    data: { ventaId, monto, metodoPago, registradoPorId, grupoPagoId },
+    data: { ventaId, monto, metodoPago, registradoPorId, grupoPagoId, fotoComprobanteKey },
   });
 
   // Si el cliente paga de mas, el excedente no se reparte entre las
@@ -494,6 +517,17 @@ async function calcularSaldoTotalCliente(tx: Prisma.TransactionClient, clienteId
 export interface PagoParcial {
   monto: number;
   metodoPago: string;
+  // Obligatoria si metodoPago es transferencia (se valida antes de
+  // aplicar ningun pago, para no dejar la mitad de un abono repartido a
+  // medias si falta la foto de la parte por transferencia).
+  fotoComprobanteKey?: string;
+}
+
+function validarComprobantePagos(pagos: PagoParcial[]) {
+  const faltaComprobante = pagos.some((p) => p.metodoPago === 'transferencia' && !p.fotoComprobanteKey);
+  if (faltaComprobante) {
+    throw new ComprobantePagoRequeridoError();
+  }
 }
 
 /**
@@ -513,6 +547,7 @@ export async function registrarPagoVenta(
   if (pagosValidos.length === 0) {
     throw new MontoPagoInvalidoError('Debes capturar un monto mayor a cero');
   }
+  validarComprobantePagos(pagosValidos);
 
   const grupoPagoId = randomUUID();
 
@@ -521,7 +556,7 @@ export async function registrarPagoVenta(
     let clienteId = '';
     let saldoNotaRestante = 0;
     for (const p of pagosValidos) {
-      const resultado = await aplicarPagoVenta(tx, ventaId, p.monto, p.metodoPago, registradoPorId, undefined, grupoPagoId);
+      const resultado = await aplicarPagoVenta(tx, ventaId, p.monto, p.metodoPago, registradoPorId, undefined, grupoPagoId, p.fotoComprobanteKey);
       pagosCreados.push(resultado.pago);
       clienteId = resultado.venta.clienteId;
       saldoNotaRestante = resultado.saldoNotaRestante;
@@ -576,6 +611,7 @@ export async function registrarPagoMultiNota(
       'El total repartido entre los metodos de pago debe ser igual al total asignado a las notas'
     );
   }
+  validarComprobantePagos(pagosValidos);
 
   const grupoPagoId = randomUUID();
 
@@ -602,7 +638,8 @@ export async function registrarPagoMultiNota(
             pago.metodoPago,
             registradoPorId,
             clienteId,
-            grupoPagoId
+            grupoPagoId,
+            pago.fotoComprobanteKey
           );
           totalPagado += monto;
           const previo = detallePorNota.get(asignacion.ventaId);
