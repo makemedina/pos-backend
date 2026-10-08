@@ -1,4 +1,4 @@
-import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante, actualizarProducto, NombreProductoInvalidoError, NombreProductoDuplicadoError } from '../services/catalogo.service';
+import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante, actualizarProducto, NombreProductoInvalidoError, NombreProductoDuplicadoError, actualizarMarcaVariante, MarcaInvalidaError, MarcaDuplicadaError, VarianteNoEncontradaError } from '../services/catalogo.service';
 import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor, eliminarProveedor, ProveedorConInformacionLigadaError } from '../services/proveedores.service';
 import { listarCostosProveedor, guardarCostoProveedor, eliminarCostoProveedor, ultimoCostoCompra } from '../services/costosProveedor.service';
 import { Router } from 'express';
@@ -738,6 +738,25 @@ router.put('/catalogo/productos/:id', requierePermiso('puedeRegistrarCompras'), 
     }
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar el producto' });
+  }
+});
+
+router.put('/catalogo/variantes/:id', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+  try {
+    const variante = await actualizarMarcaVariante(req.params.id, req.body.marca);
+    res.json(variante);
+  } catch (err) {
+    if (err instanceof MarcaInvalidaError) {
+      return res.status(400).json({ error: err.message, code: 'MARCA_INVALIDA' });
+    }
+    if (err instanceof MarcaDuplicadaError) {
+      return res.status(409).json({ error: err.message, code: 'MARCA_DUPLICADA' });
+    }
+    if (err instanceof VarianteNoEncontradaError) {
+      return res.status(404).json({ error: err.message, code: 'VARIANTE_NO_ENCONTRADA' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar la marca' });
   }
 });
 

@@ -30,6 +30,49 @@ export async function actualizarProducto(id: string, nombre: string) {
   return prisma.producto.update({ where: { id }, data: { nombre: nombreLimpio } });
 }
 
+export class MarcaInvalidaError extends Error {
+  constructor() {
+    super('La marca no puede quedar vacía.');
+  }
+}
+
+export class MarcaDuplicadaError extends Error {
+  constructor() {
+    super('Este producto ya tiene otra variante con esa marca.');
+  }
+}
+
+export class VarianteNoEncontradaError extends Error {
+  constructor() {
+    super('No se encontró el producto.');
+  }
+}
+
+/**
+ * Cambia la marca de una variante (ej. corregir un error de captura).
+ * La marca es unica por producto (@@unique([productoId, marca])); aqui se
+ * valida ademas sin distinguir mayusculas, para no terminar con "Norson"
+ * y "norson" como dos variantes del mismo producto.
+ */
+export async function actualizarMarcaVariante(id: string, marca: string) {
+  const marcaLimpia = (marca ?? '').trim();
+  if (!marcaLimpia) throw new MarcaInvalidaError();
+
+  const variante = await prisma.variante.findUnique({ where: { id } });
+  if (!variante) throw new VarianteNoEncontradaError();
+
+  const existente = await prisma.variante.findFirst({
+    where: {
+      productoId: variante.productoId,
+      marca: { equals: marcaLimpia, mode: 'insensitive' },
+      id: { not: id },
+    },
+  });
+  if (existente) throw new MarcaDuplicadaError();
+
+  return prisma.variante.update({ where: { id }, data: { marca: marcaLimpia } });
+}
+
 export async function buscarProductos(query: string) {
   if (!query || query.length < 2) return [];
 
