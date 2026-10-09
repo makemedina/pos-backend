@@ -72,8 +72,20 @@ export async function ultimoCostoCompra(proveedorId: string, varianteId: string)
  * `origen` dice de donde viene el precio que se muestra: 'compra' si es
  * el mismo de la ultima compra, 'manual' si alguien lo capturo distinto
  * (ej. el proveedor aviso de un precio nuevo y todavia no se le compra).
+ *
+ * Solo entran los precios actualizados en los ultimos DIAS_VIGENCIA_PRECIO
+ * dias.
  */
+// Un precio de hace mas de estos dias ya no es confiable para decidir a
+// quien comprarle, asi que deja de salir en la tabla (no se borra: sigue
+// en "Costos" del proveedor y en el historial de compras).
+const DIAS_VIGENCIA_PRECIO = 10;
+
 export async function tablaPreciosProveedores() {
+  const limite = new Date();
+  limite.setHours(0, 0, 0, 0);
+  limite.setDate(limite.getDate() - DIAS_VIGENCIA_PRECIO);
+
   const [proveedores, registros, lotes] = await Promise.all([
     prisma.proveedor.findMany({ select: { id: true, nombre: true }, orderBy: { nombre: 'asc' } }),
     prisma.costoProveedorProducto.findMany({
@@ -121,6 +133,7 @@ export async function tablaPreciosProveedores() {
     if (ultimasCompras.has(clave)) continue;
     const ultima = { costo: Number(l.costoUnitario), fecha: l.compra.fecha };
     ultimasCompras.set(clave, ultima);
+    if (ultima.fecha < limite) continue;
     filaDe(l.varianteId, l.variante.producto.nombre, l.variante.marca).precios[l.compra.proveedorId] = {
       costo: ultima.costo,
       actualizadoEn: ultima.fecha,
@@ -130,6 +143,7 @@ export async function tablaPreciosProveedores() {
   }
 
   for (const r of registros) {
+    if (r.actualizadoEn < limite) continue;
     const ultima = ultimasCompras.get(`${r.proveedorId}|${r.varianteId}`) ?? null;
     const costo = Number(r.costo);
     filaDe(r.varianteId, r.variante.producto.nombre, r.variante.marca).precios[r.proveedorId] = {
