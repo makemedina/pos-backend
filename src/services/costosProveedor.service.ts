@@ -61,3 +61,89 @@ export async function ultimoCostoCompra(proveedorId: string, varianteId: string)
   if (!lote) return null;
   return { costo: Number(lote.costoUnitario), fecha: lote.compra.fecha };
 }
+
+/**
+ * Arma la tabla comparativa de precios (producto/marca x proveedor) para
+ * decidir a quien conviene comprarle. Cada celda sale del costo de
+ * referencia guardado (que ya se actualiza solo con cada compra, ver
+ * compras.service.ts) y, donde no hay uno guardado -- compras de antes de
+ * que existiera esa tabla --, cae al costo de la ultima compra real.
+ *
+ * `origen` dice de donde viene el precio que se muestra: 'compra' si es
+ * el mismo de la ultima compra, 'manual' si alguien lo capturo distinto
+ * (ej. el proveedor aviso de un precio nuevo y todavia no se le compra).
+ */
+export async function tablaPreciosProveedores() {
+  const [proveedores, registros, lotes] = await Promise.all([
+    prisma.proveedor.findMany({ select: { id: true, nombre: true }, orderBy: { nombre: 'asc' } }),
+    prisma.costoProveedorProducto.findMany({
+      include: { variante: { include: { producto: true } } },
+    }),
+    prisma.loteInventario.findMany({
+      where: { compra: { cancelada: false } },
+      orderBy: { compra: { fecha: 'desc' } },
+      select: {
+        varianteId: true,
+        costoUnitario: true,
+        compra: { select: { proveedorId: true, fecha: true } },
+        variante: { select: { marca: true, producto: { select: { nombre: true } } } },
+      },
+    }),
+  ]);
+
+  // Ultima compra por proveedor+variante (los lotes ya vienen de la mas
+  // reciente a la mas vieja, asi que el primero que aparece es el bueno).
+  const ultimasCompras = new Map<string, { costo: number; fecha: Date }>();
+  const filas = new Map<
+    string,
+    {
+      varianteId: string;
+      producto: string;
+      marca: string;
+      precios: Record<
+        string,
+        { costo: number; actualizadoEn: Date; origen: 'compra' | 'manual'; ultimaCompra: { costo: number; fecha: Date } | null }
+      >;
+    }
+  >();
+
+  function filaDe(varianteId: string, producto: string, marca: string) {
+    let fila = filas.get(varianteId);
+    if (!fila) {
+      fila = { varianteId, producto, marca, precios: {} };
+      filas.set(varianteId, fila);
+    }
+    return fila;
+  }
+
+  for (const l of lotes) {
+    const clave = `${l.compra.proveedorId}|${l.varianteId}`;
+    if (ultimasCompras.has(clave)) continue;
+    const ultima = { costo: Number(l.costoUnitario), fecha: l.compra.fecha };
+    ultimasCompras.set(clave, ultima);
+    filaDe(l.varianteId, l.variante.producto.nombre, l.variante.marca).precios[l.compra.proveedorId] = {
+      costo: ultima.costo,
+      actualizadoEn: ultima.fecha,
+      origen: 'compra',
+      ultimaCompra: ultima,
+    };
+  }
+
+  for (const r of registros) {
+    const ultima = ultimasCompras.get(`${r.proveedorId}|${r.varianteId}`) ?? null;
+    const costo = Number(r.costo);
+    filaDe(r.varianteId, r.variante.producto.nombre, r.variante.marca).precios[r.proveedorId] = {
+      costo,
+      actualizadoEn: r.actualizadoEn,
+      origen: ultima && ultima.costo === costo ? 'compra' : 'manual',
+      ultimaCompra: ultima,
+    };
+  }
+
+  return {
+    proveedores,
+    filas: [...filas.values()].sort(
+      (a, b) => a.producto.localeCompare(b.producto, 'es') || a.marca.localeCompare(b.marca, 'es')
+    ),
+  };
+}

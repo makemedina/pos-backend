@@ -1,6 +1,6 @@
 import { listarCatalogo, buscarVariantes, crearVarianteRapida, buscarProductos, variantesDeProducto, listarProductosGestion, historialVariante, actualizarProducto, NombreProductoInvalidoError, NombreProductoDuplicadoError, actualizarMarcaVariante, MarcaInvalidaError, MarcaDuplicadaError, VarianteNoEncontradaError } from '../services/catalogo.service';
 import { buscarProveedores, crearProveedorRapido, importarProveedores, listarProveedores, actualizarProveedor, eliminarProveedor, ProveedorConInformacionLigadaError } from '../services/proveedores.service';
-import { listarCostosProveedor, guardarCostoProveedor, eliminarCostoProveedor, ultimoCostoCompra } from '../services/costosProveedor.service';
+import { listarCostosProveedor, guardarCostoProveedor, eliminarCostoProveedor, ultimoCostoCompra, tablaPreciosProveedores } from '../services/costosProveedor.service';
 import { Router } from 'express';
 import {
   crearVenta,
@@ -849,6 +849,15 @@ router.post('/proveedores/importar', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al importar los proveedores' });
+  }
+});
+
+router.get('/costos-proveedores/tabla', requierePermiso('puedeVerCostos'), async (_req, res) => {
+  try {
+    res.json(await tablaPreciosProveedores());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al armar la tabla de precios' });
   }
 });
 
