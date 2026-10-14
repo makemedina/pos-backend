@@ -187,6 +187,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
         },
         cancelado: false,
       },
+      include: { categoria: true, proveedor: true },
+      orderBy: { fecha: 'desc' },
     }),
   ]);
 
@@ -362,6 +364,7 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
         utilidadCobrada: d.utilidadCobrada,
         kgVendidos: d.kgVendidos,
         totalCobrado: d.totalCobrado,
+        gastos: d.gastos,
         utilidadNeta: d.ganancia - d.gastos,
         utilidadNetaCobrada: d.utilidadCobrada - d.gastos,
         porcentajeEfectivo: baseMetodoDia > 0 ? (d.ventasEfectivo / baseMetodoDia) * 100 : 0,
@@ -396,6 +399,36 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     ])
   );
 
+  // Seccion "Gastos" del dashboard: total por categoria (de mayor a
+  // menor), cada una con sus gastos individuales para el detalle al
+  // hacer click -- los gastos ya vienen del mas reciente al mas viejo.
+  const gastosPorCategoriaMap = new Map<
+    string,
+    {
+      categoria: string;
+      departamento: string;
+      total: number;
+      gastos: { id: string; fecha: Date; concepto: string; monto: number; metodoPago: string; proveedor: string | null }[];
+    }
+  >();
+  for (const gasto of gastos) {
+    let grupo = gastosPorCategoriaMap.get(gasto.categoriaId);
+    if (!grupo) {
+      grupo = { categoria: gasto.categoria.nombre, departamento: gasto.categoria.departamento, total: 0, gastos: [] };
+      gastosPorCategoriaMap.set(gasto.categoriaId, grupo);
+    }
+    grupo.total += Number(gasto.monto);
+    grupo.gastos.push({
+      id: gasto.id,
+      fecha: gasto.fecha,
+      concepto: gasto.concepto,
+      monto: Number(gasto.monto),
+      metodoPago: gasto.metodoPago,
+      proveedor: gasto.proveedor?.nombre ?? null,
+    });
+  }
+  const gastosPorCategoria = [...gastosPorCategoriaMap.values()].sort((a, b) => b.total - a.total);
+
   return {
     totalVentas,
     totalCobrado,
@@ -403,6 +436,8 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     utilidadCobrada,
     kgVendidos,
     totalGastos,
+    gastosCantidad: gastos.length,
+    gastosPorCategoria,
     utilidadNeta: utilidadBruta - totalGastos,
     // Igual que utilidadNeta, pero restando los gastos de la utilidad
     // COBRADA en vez de la "en papel" -- cuanto dinero real le queda al
