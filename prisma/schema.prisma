@@ -279,6 +279,11 @@ model Cliente {
   // ofrecerle producto -- 0=domingo ... 6=sabado (igual que Date.getDay()
   // en el resto del sistema). Vacio = no esta en ningun plan de llamadas.
   diasLlamada         Int[]    @default([])
+  // Como llego el cliente: anuncio | vendedor | recomendacion | ya_cliente
+  // | otro. Null = clientes dados de alta antes de existir este campo.
+  // Solo los de "anuncio" se le reportan a Meta como Lead (metaCapi.service.ts),
+  // para que su IA aprenda con prospectos que de verdad vinieron de anuncios.
+  origen              String?
 
   ventas Venta[]
   cotizaciones Cotizacion[]

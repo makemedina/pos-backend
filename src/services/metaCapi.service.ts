@@ -162,15 +162,23 @@ async function enviarCompra(ventaId: string) {
         currency: 'MXN',
         value: Number(venta.total),
         order_id: String(venta.folio),
+        // Como llego el cliente (anuncio, vendedor, ...) -- sirve para armar
+        // conversiones personalizadas en Meta, ej. "Compra de cliente de anuncio".
+        origen_cliente: venta.cliente.origen ?? 'sin_dato',
       },
     },
   ]);
 }
 
-/** Evento "Lead" por un cliente nuevo dado de alta (normalmente un prospecto que escribio por WhatsApp). */
+/**
+ * Evento "Lead" por un cliente nuevo, SOLO si llego por un anuncio. Los
+ * que consiguio un vendedor o llegaron recomendados no se reportan: Meta
+ * usaria esos Leads para buscar mas gente "parecida" como si fueran fruto
+ * de sus anuncios, y ensuciarian su aprendizaje.
+ */
 async function enviarClienteNuevo(clienteId: string) {
   const cliente = await prisma.cliente.findUnique({ where: { id: clienteId } });
-  if (!cliente) return;
+  if (!cliente || cliente.origen !== 'anuncio') return;
 
   const eventTime = eventTimeValido(cliente.fechaAlta);
   if (!eventTime) return;

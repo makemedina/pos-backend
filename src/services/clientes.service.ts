@@ -29,9 +29,9 @@ export async function buscarClientes(query: string) {
   });
 }
 
-export async function crearClienteRapido(nombre: string, telefono: string) {
+export async function crearClienteRapido(nombre: string, telefono: string, origen?: string) {
   const cliente = await prisma.cliente.create({
-    data: { nombre, telefono },
+    data: { nombre, telefono, origen: origen || undefined },
   });
   notificarClienteNuevoAMeta(cliente.id);
   return cliente;
@@ -54,13 +54,14 @@ interface DireccionInput {
 
 /** Alta completa desde la pantalla de Clientes (con domicilio opcional, separado por partes). */
 export async function crearCliente(
-  datos: { nombre: string; telefono: string; nombreContacto?: string } & DireccionInput
+  datos: { nombre: string; telefono: string; nombreContacto?: string; origen?: string } & DireccionInput
 ) {
   const cliente = await prisma.cliente.create({
     data: {
       nombre: datos.nombre,
       nombreContacto: datos.nombreContacto || undefined,
       telefono: datos.telefono,
+      origen: datos.origen || undefined,
       calle: datos.calle || undefined,
       colonia: datos.colonia || undefined,
       ciudad: datos.ciudad || undefined,
@@ -241,6 +242,7 @@ export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sin
       id: c.id,
       nombre: c.nombre,
       nombreContacto: c.nombreContacto,
+      origen: c.origen,
       telefono: c.telefono,
       calle: c.calle,
       colonia: c.colonia,
@@ -277,6 +279,7 @@ export async function obtenerClienteDetalle(clienteId: string) {
     id: cliente.id,
     nombre: cliente.nombre,
     nombreContacto: cliente.nombreContacto,
+    origen: cliente.origen,
     telefono: cliente.telefono,
     calle: cliente.calle,
     colonia: cliente.colonia,
@@ -301,6 +304,7 @@ interface ActualizarClienteInput extends DireccionInput {
   nombre?: string;
   nombreContacto?: string;
   telefono?: string;
+  origen?: string;
   permiteVentaCredito?: boolean;
 }
 

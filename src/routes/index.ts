@@ -1482,6 +1482,7 @@ router.post('/clientes', async (req, res) => {
       nombre,
       telefono,
       nombreContacto,
+      origen,
       calle,
       colonia,
       ciudad,
@@ -1501,6 +1502,7 @@ router.post('/clientes', async (req, res) => {
           nombre,
           telefono,
           nombreContacto,
+          origen,
           calle,
           colonia,
           ciudad,
@@ -1514,7 +1516,7 @@ router.post('/clientes', async (req, res) => {
           googleMapsUrl,
           notas,
         })
-      : await crearClienteRapido(nombre, telefono);
+      : await crearClienteRapido(nombre, telefono, origen);
     res.status(201).json(cliente);
   } catch (err) {
     console.error(err);
@@ -1577,6 +1579,7 @@ router.put('/clientes/:id', async (req, res) => {
       nombre,
       telefono,
       nombreContacto,
+      origen,
       calle,
       colonia,
       ciudad,
@@ -1595,6 +1598,7 @@ router.put('/clientes/:id', async (req, res) => {
       nombre,
       nombreContacto,
       telefono,
+      origen: origen || undefined,
       calle,
       colonia,
       ciudad,
