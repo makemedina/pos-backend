@@ -1,4 +1,5 @@
 import { prisma } from '../prisma';
+import { notificarClienteNuevoAMeta } from './metaCapi.service';
 
 export class ClienteConInformacionLigadaError extends Error {
   constructor(ventas: number, cotizaciones: number, tieneSaldoInicial: boolean) {
@@ -29,9 +30,11 @@ export async function buscarClientes(query: string) {
 }
 
 export async function crearClienteRapido(nombre: string, telefono: string) {
-  return prisma.cliente.create({
+  const cliente = await prisma.cliente.create({
     data: { nombre, telefono },
   });
+  notificarClienteNuevoAMeta(cliente.id);
+  return cliente;
 }
 
 interface DireccionInput {
@@ -53,7 +56,7 @@ interface DireccionInput {
 export async function crearCliente(
   datos: { nombre: string; telefono: string; nombreContacto?: string } & DireccionInput
 ) {
-  return prisma.cliente.create({
+  const cliente = await prisma.cliente.create({
     data: {
       nombre: datos.nombre,
       nombreContacto: datos.nombreContacto || undefined,
@@ -72,6 +75,8 @@ export async function crearCliente(
       notas: datos.notas || undefined,
     },
   });
+  notificarClienteNuevoAMeta(cliente.id);
+  return cliente;
 }
 
 /**
