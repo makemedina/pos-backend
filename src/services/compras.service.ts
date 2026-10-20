@@ -142,7 +142,8 @@ async function aplicarPagoCompra(
   metodoPago: string,
   registradoPorId: string,
   proveedorIdEsperado?: string,
-  grupoPagoId?: string
+  grupoPagoId?: string,
+  fotoComprobanteKey?: string
 ) {
   if (!monto || monto <= 0) {
     throw new MontoPagoCompraInvalidoError('El monto del pago debe ser mayor a cero');
@@ -174,7 +175,7 @@ async function aplicarPagoCompra(
   }
 
   await tx.pagoCompra.create({
-    data: { compraId, monto, metodoPago, registradoPorId, grupoPagoId },
+    data: { compraId, monto, metodoPago, registradoPorId, grupoPagoId, fotoComprobanteKey },
   });
 
   if (metodoPago === 'transferencia') {
@@ -213,11 +214,13 @@ export async function registrarPagoCompra(
   compraId: string,
   monto: number,
   metodoPago: string,
-  registradoPorId: string
+  registradoPorId: string,
+  fotoComprobanteKey: string | undefined
 ) {
+  if (!fotoComprobanteKey) throw new ComprobantePagoCompraRequeridoError();
   const grupoPagoId = randomUUID();
   return prisma.$transaction(async (tx) => {
-    const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId, undefined, grupoPagoId);
+    const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId, undefined, grupoPagoId, fotoComprobanteKey);
     return compra;
   });
 }
@@ -237,12 +240,14 @@ export async function registrarPagoMultiCompra(
   proveedorId: string,
   asignaciones: AsignacionPagoMultipleCompra[],
   metodoPago: string,
-  registradoPorId: string
+  registradoPorId: string,
+  fotoComprobanteKey: string | undefined
 ) {
   const asignacionesValidas = asignaciones.filter((a) => a.monto > 0);
   if (asignacionesValidas.length === 0) {
     throw new MontoPagoCompraInvalidoError('Debes asignar un monto mayor a cero a al menos una factura');
   }
+  if (!fotoComprobanteKey) throw new ComprobantePagoCompraRequeridoError();
 
   const grupoPagoId = randomUUID();
 
@@ -258,7 +263,8 @@ export async function registrarPagoMultiCompra(
         metodoPago,
         registradoPorId,
         proveedorId,
-        grupoPagoId
+        grupoPagoId,
+        fotoComprobanteKey
       );
       totalPagado += asignacion.monto;
       detalle.push({
@@ -288,8 +294,20 @@ export async function pagosCompra(compraId: string) {
     fecha: p.fecha,
     cancelado: p.cancelado,
     canceladoEn: p.canceladoEn,
+    tieneComprobante: !!p.fotoComprobanteKey,
     registradoPor: { nombre: p.registradoPor?.nombre ?? 'Registro anterior' },
   }));
+}
+
+export class ComprobantePagoCompraRequeridoError extends Error {
+  constructor() {
+    super('Sube la foto del comprobante del pago (transferencia o recibo firmado por el proveedor).');
+  }
+}
+
+/** Para mostrar la foto del comprobante de un pago a proveedor. */
+export async function obtenerPagoCompraPorId(pagoId: string) {
+  return prisma.pagoCompra.findUniqueOrThrow({ where: { id: pagoId } });
 }
 
 export class PagoCompraYaCanceladoError extends Error {
@@ -413,6 +431,9 @@ export async function pagosProveedorAgrupados(proveedorId: string) {
       facturas: { compraId: string; numeroFactura: string | null; monto: number; cancelado: boolean }[];
       registradoPor: string;
       todoCancelado: boolean;
+      // Id de un PagoCompra del grupo que tiene foto -- todos los del
+      // grupo comparten la misma, asi que con uno basta para verla.
+      comprobantePagoId: string | null;
     }
   >();
 
@@ -428,10 +449,12 @@ export async function pagosProveedorAgrupados(proveedorId: string) {
         facturas: [],
         registradoPor: p.registradoPor?.nombre ?? 'Registro anterior',
         todoCancelado: true,
+        comprobantePagoId: null,
       };
       grupos.set(grupoKey, grupo);
     }
     if (p.fecha < grupo.fecha) grupo.fecha = p.fecha;
+    if (!grupo.comprobantePagoId && p.fotoComprobanteKey) grupo.comprobantePagoId = p.id;
     if (!p.cancelado) {
       grupo.metodosPago.add(p.metodoPago);
       grupo.montoTotal += Number(p.monto);
@@ -454,6 +477,7 @@ export async function pagosProveedorAgrupados(proveedorId: string) {
       facturas: g.facturas,
       registradoPor: g.registradoPor,
       cancelado: g.todoCancelado,
+      comprobantePagoId: g.comprobantePagoId,
     }))
     .sort((a, b) => b.fecha.getTime() - a.fecha.getTime());
 }

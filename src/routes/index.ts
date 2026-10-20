@@ -12,7 +12,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, pagosProveedorAgrupados, cancelarGrupoPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, pagosProveedorAgrupados, cancelarGrupoPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError, ComprobantePagoCompraRequeridoError, obtenerPagoCompraPorId } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, obtenerAjustePorId, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clientesEnRiesgo } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
@@ -33,6 +33,8 @@ import {
 import {
   buscarClientes,
   crearClienteRapido,
+  telefonoClienteValido,
+  MENSAJE_TELEFONO_INVALIDO,
   crearCliente,
   importarClientes,
   cargarSaldosIniciales,
@@ -1106,12 +1108,35 @@ router.get('/compras/:id/factura', requierePermiso('puedeVerCostos'), async (req
   }
 });
 
-router.post('/compras/:id/pagos', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+// Los pagos a proveedor son multipart/form-data: los campos viajan como
+// texto (las asignaciones como JSON) mas el archivo "foto" del
+// comprobante, que es obligatorio en todos los pagos.
+function errorComprobantePagoCompra(err: unknown, res: any) {
+  if (err instanceof ComprobantePagoCompraRequeridoError) {
+    return res.status(400).json({ error: err.message, code: 'FOTO_REQUERIDA' });
+  }
+  if (err instanceof TipoFotoInvalidoError) {
+    return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
+  }
+  if (err instanceof BackupNoConfiguradoError) {
+    return res.status(500).json({
+      error: 'El almacenamiento de fotos de comprobante no esta configurado. Avisa al administrador del sistema.',
+      code: 'ALMACENAMIENTO_NO_CONFIGURADO',
+    });
+  }
+  return null;
+}
+
+router.post('/compras/:id/pagos', requierePermiso('puedeRegistrarCompras'), subidaComprobante.single('foto'), async (req, res) => {
   try {
     const { monto, metodoPago } = req.body;
-    const compra = await registrarPagoCompra(req.params.id, Number(monto), metodoPago, req.usuario!.id);
+    const fotoComprobanteKey = req.file
+      ? await subirFotoComprobantePago(req.file.buffer, req.file.mimetype)
+      : undefined;
+    const compra = await registrarPagoCompra(req.params.id, Number(monto), metodoPago, req.usuario!.id, fotoComprobanteKey);
     res.status(201).json(compra);
   } catch (err) {
+    if (errorComprobantePagoCompra(err, res)) return;
     if (err instanceof MontoPagoCompraInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
     }
@@ -1123,9 +1148,10 @@ router.post('/compras/:id/pagos', requierePermiso('puedeRegistrarCompras'), asyn
   }
 });
 
-router.post('/proveedores/:id/pagos', requierePermiso('puedeRegistrarCompras'), async (req, res) => {
+router.post('/proveedores/:id/pagos', requierePermiso('puedeRegistrarCompras'), subidaComprobante.single('foto'), async (req, res) => {
   try {
-    const { asignaciones, metodoPago } = req.body;
+    const { metodoPago } = req.body;
+    const asignaciones = typeof req.body.asignaciones === 'string' ? JSON.parse(req.body.asignaciones) : req.body.asignaciones;
     if (!Array.isArray(asignaciones) || asignaciones.length === 0) {
       return res.status(400).json({ error: 'Debes enviar al menos una asignacion de pago', code: 'MONTO_INVALIDO' });
     }
@@ -1133,14 +1159,19 @@ router.post('/proveedores/:id/pagos', requierePermiso('puedeRegistrarCompras'), 
       compraId: String(a.compraId),
       monto: Number(a.monto),
     }));
+    const fotoComprobanteKey = req.file
+      ? await subirFotoComprobantePago(req.file.buffer, req.file.mimetype)
+      : undefined;
     const resultado = await registrarPagoMultiCompra(
       req.params.id,
       asignacionesNormalizadas,
       metodoPago,
-      req.usuario!.id
+      req.usuario!.id,
+      fotoComprobanteKey
     );
     res.status(201).json(resultado);
   } catch (err) {
+    if (errorComprobantePagoCompra(err, res)) return;
     if (err instanceof MontoPagoCompraInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
     }
@@ -1239,6 +1270,22 @@ router.get('/compras/:id/pagos', requierePermiso('puedeVerCarteraGeneral'), asyn
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al consultar los pagos de la compra' });
+  }
+});
+
+router.get('/compras/pagos/:pagoId/comprobante', requierePermiso('puedeVerCarteraGeneral'), async (req, res) => {
+  try {
+    const pago = await obtenerPagoCompraPorId(req.params.pagoId);
+    if (!pago.fotoComprobanteKey) {
+      return res.status(404).json({ error: 'Este pago no tiene foto de comprobante.' });
+    }
+    const { cuerpo, contentType } = await descargarFotoComprobantePago(pago.fotoComprobanteKey);
+    if (contentType) res.setHeader('Content-Type', contentType);
+    (cuerpo as any).pipe(res);
+  } catch (err) {
+    if (errorComprobantePagoCompra(err, res)) return;
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener el comprobante' });
   }
 });
 
@@ -1496,11 +1543,15 @@ router.post('/clientes', async (req, res) => {
       googleMapsUrl,
       notas,
     } = req.body;
+    const telefonoValido = telefonoClienteValido(telefono);
+    if (!telefonoValido) {
+      return res.status(400).json({ error: MENSAJE_TELEFONO_INVALIDO });
+    }
     const tieneDatosExtra = calle || colonia || ciudad || estado || codigoPostal || nombreContacto || googleMapsUrl || notas;
     const cliente = tieneDatosExtra
       ? await crearCliente({
           nombre,
-          telefono,
+          telefono: telefonoValido,
           nombreContacto,
           origen,
           calle,
@@ -1516,7 +1567,7 @@ router.post('/clientes', async (req, res) => {
           googleMapsUrl,
           notas,
         })
-      : await crearClienteRapido(nombre, telefono, origen);
+      : await crearClienteRapido(nombre, telefonoValido, origen);
     res.status(201).json(cliente);
   } catch (err) {
     console.error(err);
@@ -1594,10 +1645,20 @@ router.put('/clientes/:id', async (req, res) => {
       notas,
       permiteVentaCredito,
     } = req.body;
+    // Si viene el telefono (la pantalla de edicion siempre lo manda), tiene
+    // que ser valido -- asi los clientes viejos sin telefono se corrigen la
+    // proxima vez que alguien los edite.
+    let telefonoValido: string | undefined;
+    if (telefono !== undefined) {
+      telefonoValido = telefonoClienteValido(telefono) ?? undefined;
+      if (!telefonoValido) {
+        return res.status(400).json({ error: MENSAJE_TELEFONO_INVALIDO });
+      }
+    }
     const datos: any = {
       nombre,
       nombreContacto,
-      telefono,
+      telefono: telefonoValido,
       origen: origen || undefined,
       calle,
       colonia,

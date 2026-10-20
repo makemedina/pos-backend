@@ -212,6 +212,11 @@ model PagoCompra {
   // proveedor puede repartirse entre varias facturas a la vez. Permite
   // cancelar TODAS esas facturas de un solo golpe (cancelarGrupoPagoCompra).
   grupoPagoId     String?
+  // Foto del comprobante del pago (transferencia, recibo firmado, etc.).
+  // Obligatoria para pagos nuevos (ver ComprobantePagoCompraRequeridoError);
+  // queda opcional en la base porque los pagos de antes no la tienen. Un
+  // pago repartido entre varias facturas comparte la misma foto.
+  fotoComprobanteKey String?
 
   @@index([grupoPagoId])
 }

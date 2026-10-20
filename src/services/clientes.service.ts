@@ -1,5 +1,19 @@
 import { prisma } from '../prisma';
-import { notificarClienteNuevoAMeta } from './metaCapi.service';
+import { normalizarTelefono, notificarClienteNuevoAMeta } from './metaCapi.service';
+
+/**
+ * Telefono del cliente a 10 digitos (ej. "6671591730"), o null si no es un
+ * celular mexicano valido. Es el dato con el que Meta empareja cada venta
+ * con la persona que vio el anuncio, asi que no se acepta vacio ni a medias.
+ */
+export function telefonoClienteValido(telefono: unknown): string | null {
+  if (typeof telefono !== 'string') return null;
+  const normalizado = normalizarTelefono(telefono);
+  return normalizado ? normalizado.slice(2) : null;
+}
+
+export const MENSAJE_TELEFONO_INVALIDO =
+  'El teléfono debe tener 10 dígitos (el número de WhatsApp del cliente, ej. 667 159 1730).';
 
 export class ClienteConInformacionLigadaError extends Error {
   constructor(ventas: number, cotizaciones: number, tieneSaldoInicial: boolean) {
