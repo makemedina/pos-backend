@@ -149,7 +149,7 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
   const periodo = filters.periodo || 'todos';
   const { inicio, fin } = obtenerRango(periodo, filters.desde, filters.hasta);
 
-  const [ventas, gastos] = await Promise.all([
+  const [ventas, gastos, clientesNuevos] = await Promise.all([
     prisma.venta.findMany({
       where: {
         fecha: {
@@ -189,6 +189,13 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
       },
       include: { categoria: true, proveedor: true },
       orderBy: { fecha: 'desc' },
+    }),
+    // Clientes dados de alta en el periodo, con cuantas ventas (no
+    // canceladas, de cualquier fecha) tienen -- para "Ventas por origen":
+    // de los que llegaron por anuncio, cuantos ya compraron.
+    prisma.cliente.findMany({
+      where: { fechaAlta: { gte: inicio, lte: fin } },
+      select: { origen: true, _count: { select: { ventas: { where: { cancelada: false } } } } },
     }),
   ]);
 
@@ -399,6 +406,65 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     ])
   );
 
+  // Seccion "Ventas por origen": como llegaron los clientes (anuncio,
+  // vendedor, ...) y cuanto compraron en el periodo. Sirve para comparar
+  // contra lo que reporta Meta. Los clientes sin origen capturado (los
+  // dados de alta antes de existir el campo) caen en "sin_dato".
+  interface AcumuladoOrigen {
+    origen: string;
+    totalVentas: number;
+    utilidadBruta: number;
+    ventasCantidad: number;
+    clientes: Map<string, number>;
+    clientesNuevos: number;
+    clientesNuevosQueCompraron: number;
+  }
+  const porOrigenMap = new Map<string, AcumuladoOrigen>();
+  function obtenerOrigen(origen: string | null): AcumuladoOrigen {
+    const clave = origen || 'sin_dato';
+    let grupo = porOrigenMap.get(clave);
+    if (!grupo) {
+      grupo = {
+        origen: clave,
+        totalVentas: 0,
+        utilidadBruta: 0,
+        ventasCantidad: 0,
+        clientes: new Map(),
+        clientesNuevos: 0,
+        clientesNuevosQueCompraron: 0,
+      };
+      porOrigenMap.set(clave, grupo);
+    }
+    return grupo;
+  }
+  for (const venta of ventas) {
+    const grupo = obtenerOrigen(venta.cliente.origen);
+    grupo.totalVentas += Number(venta.total);
+    grupo.ventasCantidad += 1;
+    grupo.clientes.set(venta.cliente.nombre, (grupo.clientes.get(venta.cliente.nombre) || 0) + Number(venta.total));
+    for (const item of venta.items) {
+      const cantidad = Number(item.cantidad);
+      grupo.utilidadBruta += cantidad * Number(item.precioUnitario) - cantidad * Number(item.costoUnitarioSnapshot);
+    }
+  }
+  for (const cliente of clientesNuevos) {
+    const grupo = obtenerOrigen(cliente.origen);
+    grupo.clientesNuevos += 1;
+    if (cliente._count.ventas > 0) grupo.clientesNuevosQueCompraron += 1;
+  }
+  const ventasPorOrigen = [...porOrigenMap.values()]
+    .map((g) => ({
+      origen: g.origen,
+      totalVentas: g.totalVentas,
+      utilidadBruta: g.utilidadBruta,
+      ventasCantidad: g.ventasCantidad,
+      clientesConCompra: g.clientes.size,
+      clientesNuevos: g.clientesNuevos,
+      clientesNuevosQueCompraron: g.clientesNuevosQueCompraron,
+      clientes: [...g.clientes.entries()].sort((a, b) => b[1] - a[1]),
+    }))
+    .sort((a, b) => b.totalVentas - a.totalVentas || b.clientesNuevos - a.clientesNuevos);
+
   // Seccion "Gastos" del dashboard: total por categoria (de mayor a
   // menor), cada una con sus gastos individuales para el detalle al
   // hacer click -- los gastos ya vienen del mas reciente al mas viejo.
@@ -454,6 +520,7 @@ export async function obtenerDashboard(filters: DashboardFilters = {}) {
     detalleClientesPorValor,
     detalleClientesPorVolumen,
     ventasPorVendedor: Object.entries(ventasPorVendedor).sort((a, b) => b[1] - a[1]),
+    ventasPorOrigen,
     detallePorDia,
   };
 }
