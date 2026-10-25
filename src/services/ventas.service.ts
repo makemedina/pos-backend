@@ -2,7 +2,6 @@ import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { consumirSaldoAFavor } from './saldoAFavor.service';
 import { redondearCentavos } from '../utils/dinero';
-import { notificarCompraAMeta } from './metaCapi.service';
 
 interface ItemVentaInput {
   varianteId: string;
@@ -294,8 +293,8 @@ export async function crearVenta(input: CrearVentaInput) {
     return { venta, items, saldoTotalCliente };
   });
 
-  // Fuera de la transaccion: solo se avisa a Meta si la venta ya quedo guardada.
-  notificarCompraAMeta(resultado.venta.id);
+  // La venta se le avisa a Meta despues, desde una tarea programada (ver
+  // enviarComprasPendientesAMeta), para no reportar ventas que se cancelan.
 
   return resultado;
 }

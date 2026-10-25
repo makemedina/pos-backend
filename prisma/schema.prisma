@@ -359,6 +359,11 @@ model Venta {
   canceladaPor    Usuario? @relation("CancelaVenta", fields: [canceladaPorId], references: [id])
   autorizadaPorId String?
   autorizadaPor   Usuario? @relation("AutorizaCancelacionVenta", fields: [autorizadaPorId], references: [id])
+  // Cuando se reviso esta venta para mandarla a Meta como "Purchase" (se
+  // mando, o se descarto por estar cancelada). Se manda con 6 horas de
+  // retraso para no reportar ventas que se cancelan al rato -- ver
+  // enviarComprasPendientesAMeta en metaCapi.service.ts. null = pendiente.
+  metaRevisadaEn  DateTime?
 
   items VentaItem[]
   pagos PagoVenta[]
@@ -368,6 +373,7 @@ model Venta {
   @@index([clienteId])
   @@index([vendedorId])
   @@index([estadoPago])
+  @@index([metaRevisadaEn])
 }
 
 // Cotizacion: carrito armado y compartido con el cliente ANTES de

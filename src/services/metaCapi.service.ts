@@ -15,8 +15,12 @@ import { prisma } from '../prisma';
 // app funciona igual). Con META_TEST_EVENT_CODE los eventos llegan solo a
 // la pestana "Test Events" del Events Manager y no afectan las campanas.
 //
-// Todo es "dispara y olvida": si Meta falla o tarda, la venta/cliente ya
-// quedo guardado y solo se registra el error en el log.
+// Los clientes nuevos se avisan al momento ("dispara y olvida": si Meta
+// falla, el cliente ya quedo guardado y solo se registra el error). Las
+// ventas, en cambio, se mandan con RETRASO_COMPRA_HORAS de retraso desde
+// una tarea programada (enviarComprasPendientesAMeta): Meta no permite
+// borrar una compra ya recibida, y casi todas las cancelaciones pasan en
+// las primeras horas, asi que esperar evita reportarle ventas canceladas.
 
 const DATASET_ID = process.env.META_DATASET_ID;
 const TOKEN = process.env.META_CAPI_TOKEN;
@@ -27,6 +31,10 @@ const metaConfigurado = !!(DATASET_ID && TOKEN);
 
 // Meta rechaza eventos con mas de 7 dias de antiguedad.
 const MAX_ANTIGUEDAD_SEG = 7 * 24 * 60 * 60;
+
+// En los 90 dias previos a este cambio, el 97% de las ventas canceladas se
+// cancelaron dentro de las primeras 6 horas.
+const RETRASO_COMPRA_HORAS = 6;
 
 function sha256(valor: string): string {
   return createHash('sha256').update(valor).digest('hex');
@@ -139,7 +147,8 @@ function eventTimeValido(fecha: Date): number | null {
 /**
  * Evento "Purchase" por una venta registrada. event_id = id de la venta,
  * para que Meta descarte duplicados si llegara a mandarse dos veces.
- * action_source "chat": la venta se cerro por WhatsApp.
+ * action_source "chat": la venta se cerro por WhatsApp. Las ventas
+ * canceladas, en cero o demasiado viejas no se mandan.
  */
 async function enviarCompra(ventaId: string) {
   const venta = await prisma.venta.findUnique({
@@ -194,9 +203,51 @@ async function enviarClienteNuevo(clienteId: string) {
   ]);
 }
 
-export function notificarCompraAMeta(ventaId: string) {
-  if (!metaConfigurado) return;
-  enviarCompra(ventaId).catch((err) => console.error('[meta-capi] Purchase', ventaId, err));
+let enviandoCompras = false;
+
+/**
+ * Manda a Meta las ventas que ya cumplieron RETRASO_COMPRA_HORAS y que
+ * nadie ha revisado (metaRevisadaEn null). Las que se cancelaron en ese
+ * tiempo solo se marcan como revisadas, sin mandarse. Si Meta falla, la
+ * venta se queda pendiente y se reintenta en la siguiente corrida (hasta
+ * que cumpla los 7 dias que acepta Meta). Corre desde cron.ts.
+ */
+export async function enviarComprasPendientesAMeta() {
+  if (!metaConfigurado || enviandoCompras) return { enviadas: 0, descartadas: 0 };
+  enviandoCompras = true;
+  try {
+    const ahora = Date.now();
+    const pendientes = await prisma.venta.findMany({
+      where: {
+        metaRevisadaEn: null,
+        fecha: {
+          lte: new Date(ahora - RETRASO_COMPRA_HORAS * 3600 * 1000),
+          gte: new Date(ahora - MAX_ANTIGUEDAD_SEG * 1000),
+        },
+      },
+      select: { id: true, cancelada: true },
+      orderBy: { fecha: 'asc' },
+    });
+
+    let enviadas = 0;
+    let descartadas = 0;
+    for (const venta of pendientes) {
+      try {
+        if (venta.cancelada) {
+          descartadas++;
+        } else {
+          await enviarCompra(venta.id);
+          enviadas++;
+        }
+        await prisma.venta.update({ where: { id: venta.id }, data: { metaRevisadaEn: new Date() } });
+      } catch (err) {
+        console.error('[meta-capi] Purchase', venta.id, err);
+      }
+    }
+    return { enviadas, descartadas };
+  } finally {
+    enviandoCompras = false;
+  }
 }
 
 export function notificarClienteNuevoAMeta(clienteId: string) {

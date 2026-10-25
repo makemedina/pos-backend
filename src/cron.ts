@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { crearBackup, BackupNoConfiguradoError } from './services/backup.service';
 import { sugerirDiasCompraAutomaticamente } from './services/clientes.service';
 import { notificarPendientesDeHoy } from './services/push.service';
+import { enviarComprasPendientesAMeta } from './services/metaCapi.service';
 
 /**
  * Respaldo automatico de toda la base de datos, todos los dias a
@@ -62,4 +63,17 @@ export function iniciarTareasProgramadas() {
     },
     { timezone: 'America/Mazatlan' }
   );
+
+  // Ventas a Meta (Conversions API), con unas horas de retraso para no
+  // reportar las que se cancelan -- ver enviarComprasPendientesAMeta.
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      const { enviadas, descartadas } = await enviarComprasPendientesAMeta();
+      if (enviadas || descartadas) {
+        console.log(`[meta-capi] ${enviadas} compra(s) enviada(s), ${descartadas} cancelada(s) descartada(s)`);
+      }
+    } catch (err) {
+      console.error('[meta-capi] Fallo al enviar compras pendientes:', err);
+    }
+  });
 }
