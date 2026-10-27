@@ -14,7 +14,7 @@ import {
 } from '../services/ventas.service';
 import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, pagosProveedorAgrupados, cancelarGrupoPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError, ComprobantePagoCompraRequeridoError, obtenerPagoCompraPorId } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, obtenerAjustePorId, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
-import { clientesEnRiesgo } from '../services/analitica.service';
+import { clasificacionClientes, clientesEnRiesgo, TIPOS_CLIENTE } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
@@ -1405,6 +1405,15 @@ router.get('/inventario/antiguedad-stock', requierePermiso('puedeVerCostos'), as
   }
 });
 
+router.get('/analitica/clasificacion-clientes', requierePermiso('puedeVerCarteraGeneral'), async (_req, res) => {
+  try {
+    res.json(await clasificacionClientes());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar la clasificación de clientes' });
+  }
+});
+
 router.get('/analitica/clientes-en-riesgo', requierePermiso('puedeVerCarteraGeneral'), async (_req, res) => {
   try {
     const reporte = await clientesEnRiesgo();
@@ -1644,7 +1653,11 @@ router.put('/clientes/:id', async (req, res) => {
       googleMapsUrl,
       notas,
       permiteVentaCredito,
+      tipo,
     } = req.body;
+    if (tipo !== undefined && tipo !== null && tipo !== '' && !TIPOS_CLIENTE.includes(tipo)) {
+      return res.status(400).json({ error: 'Tipo de cliente no válido' });
+    }
     // Si viene el telefono (la pantalla de edicion siempre lo manda), tiene
     // que ser valido -- asi los clientes viejos sin telefono se corrigen la
     // proxima vez que alguien los edite.
@@ -1672,6 +1685,8 @@ router.put('/clientes/:id', async (req, res) => {
       codigoPostalEntrega,
       googleMapsUrl,
       notas,
+      // '' o null = volver a "sin clasificar"; undefined = no se toca.
+      tipo: tipo === undefined ? undefined : tipo || null,
     };
     // El switch de credito solo lo puede cambiar un administrador, sin
     // importar lo que venga en el body si quien llama no lo es.

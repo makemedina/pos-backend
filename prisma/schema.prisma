@@ -289,6 +289,12 @@ model Cliente {
   // Solo los de "anuncio" se le reportan a Meta como Lead (metaCapi.service.ts),
   // para que su IA aprenda con prospectos que de verdad vinieron de anuncios.
   origen              String?
+  // Que tipo de cliente es: recurrente (negocio que compra seguido) |
+  // ocasional (companeros, conocidos, compras de vez en cuando) | cerrado
+  // (el negocio ya cerro). Null = sin clasificar todavia. Solo los
+  // recurrentes y los sin clasificar entran a la analitica de riesgo y a
+  // las llamadas de hoy (ver analitica.service.ts y clientes.service.ts).
+  tipo                String?
 
   ventas Venta[]
   cotizaciones Cotizacion[]

@@ -257,6 +257,7 @@ export async function listarClientesConSaldo(filtro: 'todos' | 'conDeuda' | 'sin
       nombre: c.nombre,
       nombreContacto: c.nombreContacto,
       origen: c.origen,
+      tipo: c.tipo,
       telefono: c.telefono,
       calle: c.calle,
       colonia: c.colonia,
@@ -294,6 +295,7 @@ export async function obtenerClienteDetalle(clienteId: string) {
     nombre: cliente.nombre,
     nombreContacto: cliente.nombreContacto,
     origen: cliente.origen,
+    tipo: cliente.tipo,
     telefono: cliente.telefono,
     calle: cliente.calle,
     colonia: cliente.colonia,
@@ -319,6 +321,7 @@ interface ActualizarClienteInput extends DireccionInput {
   nombreContacto?: string;
   telefono?: string;
   origen?: string;
+  tipo?: string | null;
   permiteVentaCredito?: boolean;
 }
 
@@ -446,6 +449,14 @@ function normalizarFecha(fecha: Date) {
 }
 
 const MIN_VENTAS_PARA_SUGERENCIA = 3;
+
+// Los clientes ocasionales y los negocios cerrados no se meten al plan de
+// llamadas (ni se les sugieren dias) -- se conservan sus dias por si se
+// reclasifican despues. Va con OR porque en SQL "tipo <> 'cerrado'" deja
+// fuera a los NULL (los sin clasificar), y esos si deben entrar.
+const SOLO_RECURRENTES_O_SIN_CLASIFICAR = {
+  OR: [{ tipo: null }, { tipo: 'recurrente' }],
+};
 const MIN_REPETICIONES_DIA = 2;
 
 /**
@@ -467,7 +478,7 @@ const MIN_REPETICIONES_DIA = 2;
  */
 export async function sugerirDiasCompraAutomaticamente() {
   const clientesSinDias = await prisma.cliente.findMany({
-    where: { diasLlamada: { equals: [] } },
+    where: { diasLlamada: { equals: [] }, ...SOLO_RECURRENTES_O_SIN_CLASIFICAR },
     select: { id: true },
   });
   if (clientesSinDias.length === 0) return { clientesActualizados: 0 };
@@ -529,7 +540,7 @@ export async function listarLlamadasDeHoy() {
   const diaSemana = hoy.getDay(); // 0=domingo ... 6=sabado, igual que diasLlamada
 
   const clientes = await prisma.cliente.findMany({
-    where: { diasLlamada: { has: diaSemana } },
+    where: { diasLlamada: { has: diaSemana }, ...SOLO_RECURRENTES_O_SIN_CLASIFICAR },
     orderBy: { nombre: 'asc' },
   });
 

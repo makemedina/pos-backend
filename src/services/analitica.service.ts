@@ -18,6 +18,28 @@ const COMPRAS_MINIMAS_PARA_ANALIZAR = 3;
 
 const UN_DIA_MS = 1000 * 60 * 60 * 24;
 
+export const TIPOS_CLIENTE = ['recurrente', 'ocasional', 'cerrado'];
+
+// Los ocasionales (companeros, conocidos) y los negocios cerrados no se
+// analizan por riesgo: que dejen de comprar es normal en ellos, y solo
+// llenarian la lista de llamadas con gente que no vale la pena rescatar.
+const TIPOS_FUERA_DE_RIESGO = ['ocasional', 'cerrado'];
+
+// Cortes para SUGERIR el tipo de un cliente sin clasificar (la decision
+// final siempre es de quien lo marca a mano):
+// - Con 3+ compras y comprando en promedio cada 30 dias habiles o menos
+//   (~1 vez al mes) -> recurrente; si compra mas espaciado -> ocasional.
+// - Con menos de 3 compras: si ya pasaron 60 dias desde la primera, se
+//   sugiere ocasional; antes de eso es muy pronto para saber.
+const INTERVALO_MAXIMO_RECURRENTE_DIAS = 30;
+const DIAS_PARA_JUZGAR_CLIENTE_NUEVO = 60;
+
+// Un recurrente se marca como "¿cerro?" cuando lleva sin comprar al menos
+// 50 dias habiles (~2 meses) Y al menos 3 veces su ritmo normal -- asi
+// uno que compra cada 3 semanas no salta solo por unas vacaciones.
+const DIAS_MINIMOS_POSIBLE_CERRADO = 50;
+const VECES_RITMO_POSIBLE_CERRADO = 3;
+
 // El negocio no abre los domingos -- para el ritmo de compra ("cada
 // cuantos dias compra" / "cuantos dias lleva sin comprar"), contar el
 // domingo como un dia habil mas haria que un cliente que compra cada
@@ -78,6 +100,7 @@ export async function clientesEnRiesgo(): Promise<ClienteEnRiesgo[]> {
   const resultado: ClienteEnRiesgo[] = [];
 
   for (const c of clientes) {
+    if (c.tipo && TIPOS_FUERA_DE_RIESGO.includes(c.tipo)) continue;
     if (c.ventas.length < COMPRAS_MINIMAS_PARA_ANALIZAR) continue;
 
     const fechas = c.ventas.map((v) => v.fecha);
@@ -142,4 +165,99 @@ export async function clientesEnRiesgo(): Promise<ClienteEnRiesgo[]> {
   }
 
   return resultado.sort((a, b) => a.prioridadPct - b.prioridadPct);
+}
+
+export type TipoSugerido = 'recurrente' | 'ocasional';
+
+export interface ClienteParaClasificar {
+  id: string;
+  nombre: string;
+  telefono: string;
+  tipo: string | null;
+  // null = todavia muy nuevo para sugerir algo.
+  sugerencia: TipoSugerido | null;
+  compras: number;
+  intervaloPromedioDias: number | null;
+  diasSinComprar: number;
+  posibleCerrado: boolean;
+}
+
+export interface ClasificacionClientes {
+  resumen: { recurrente: number; ocasional: number; cerrado: number; sinClasificar: number };
+  // Los sin clasificar (con al menos una compra) y los recurrentes que
+  // parecen haber cerrado -- lo que alguien tiene que revisar a mano.
+  porRevisar: ClienteParaClasificar[];
+}
+
+/**
+ * Sugiere a cada cliente sin clasificar si es recurrente u ocasional segun
+ * su historial, y avisa de los recurrentes que llevan tanto sin comprar
+ * que quiza cerraron. Nunca cambia el tipo de nadie -- solo sugiere.
+ */
+export async function clasificacionClientes(): Promise<ClasificacionClientes> {
+  const clientes = await prisma.cliente.findMany({
+    include: {
+      ventas: {
+        // Las notas de saldo heredado no tienen productos -- no son compras.
+        where: { cancelada: false, items: { some: {} } },
+        select: { fecha: true },
+        orderBy: { fecha: 'asc' },
+      },
+    },
+    orderBy: { nombre: 'asc' },
+  });
+
+  const hoy = new Date();
+  const resumen = { recurrente: 0, ocasional: 0, cerrado: 0, sinClasificar: 0 };
+  const porRevisar: ClienteParaClasificar[] = [];
+
+  for (const c of clientes) {
+    if (c.tipo === 'recurrente' || c.tipo === 'ocasional' || c.tipo === 'cerrado') resumen[c.tipo]++;
+    else resumen.sinClasificar++;
+
+    if (c.tipo === 'ocasional' || c.tipo === 'cerrado') continue;
+    // Prospectos que nunca han comprado: no hay nada que clasificar aun.
+    if (c.ventas.length === 0) continue;
+
+    const fechas = c.ventas.map((v) => v.fecha);
+    const compras = fechas.length;
+    const diasSinComprar = diasHabilesEntre(fechas[compras - 1], hoy);
+
+    let intervaloPromedioDias: number | null = null;
+    if (compras >= 2) {
+      let suma = 0;
+      for (let i = 1; i < compras; i++) suma += diasHabilesEntre(fechas[i - 1], fechas[i]);
+      intervaloPromedioDias = suma / (compras - 1);
+    }
+
+    let sugerencia: TipoSugerido | null = null;
+    if (compras >= COMPRAS_MINIMAS_PARA_ANALIZAR) {
+      sugerencia = intervaloPromedioDias! <= INTERVALO_MAXIMO_RECURRENTE_DIAS ? 'recurrente' : 'ocasional';
+    } else if ((hoy.getTime() - fechas[0].getTime()) / UN_DIA_MS >= DIAS_PARA_JUZGAR_CLIENTE_NUEVO) {
+      sugerencia = 'ocasional';
+    }
+
+    const pareceRecurrente = c.tipo === 'recurrente' || (!c.tipo && sugerencia === 'recurrente');
+    const posibleCerrado =
+      pareceRecurrente &&
+      intervaloPromedioDias !== null &&
+      diasSinComprar >= DIAS_MINIMOS_POSIBLE_CERRADO &&
+      diasSinComprar >= intervaloPromedioDias * VECES_RITMO_POSIBLE_CERRADO;
+
+    if (c.tipo === 'recurrente' && !posibleCerrado) continue;
+
+    porRevisar.push({
+      id: c.id,
+      nombre: c.nombre,
+      telefono: c.telefono,
+      tipo: c.tipo,
+      sugerencia,
+      compras,
+      intervaloPromedioDias: intervaloPromedioDias === null ? null : Math.round(intervaloPromedioDias),
+      diasSinComprar,
+      posibleCerrado,
+    });
+  }
+
+  return { resumen, porRevisar };
 }
