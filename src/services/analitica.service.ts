@@ -5,7 +5,7 @@ import { prisma } from '../prisma';
 // no es un numero fijo igual para todos: un cliente que compra cada 3
 // dias y uno que compra cada mes tienen "normales" distintos, y cada uno
 // se compara solo contra su propio historial.
-export const UMBRAL_RIESGO_PORCENTAJE = 70;
+export const UMBRAL_RIESGO_PORCENTAJE = 50;
 
 // Ventana usada para medir "volumen reciente" (senal de "esta comprando
 // menos"), en dias.
