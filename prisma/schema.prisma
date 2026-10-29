@@ -15,42 +15,44 @@ datasource db {
 // ---------- USUARIOS Y PERMISOS ----------
 
 model Usuario {
-  id        String   @id @default(uuid())
-  nombre    String
-  telefono  String   @unique
-  pin       String   // hash del PIN de acceso
-  rolBase   String   @default("vendedor") // "vendedor" | "administrador", plantilla inicial
-  activo    Boolean  @default(true)
-  creadoEn  DateTime @default(now())
+  id       String   @id @default(uuid())
+  nombre   String
+  telefono String   @unique
+  pin      String // hash del PIN de acceso
+  rolBase  String   @default("vendedor") // "vendedor" | "administrador", plantilla inicial
+  activo   Boolean  @default(true)
+  creadoEn DateTime @default(now())
 
-  permisos           PermisosUsuario?
-  ventasRegistradas  Venta[]            @relation("VendedorVenta")
-  gastosRegistrados  Gasto[] @relation("RegistraGasto")
-  cortesRegistrados  CorteCaja[]
-  ajustesSolicitados AjusteInventario[] @relation("SolicitaAjuste")
-  ajustesAutorizados AjusteInventario[] @relation("AutorizaAjuste")
-  itemsAutorizados   VentaItem[]        @relation("AutorizaPrecio")
-  pagosVentaRegistrados PagoVenta[]
-  pagosCompraRegistrados PagoCompra[]
-  ventasCanceladas Venta[] @relation("CancelaVenta")
-  ventasAutorizadasCancelacion Venta[] @relation("AutorizaCancelacionVenta")
-  comprasCanceladas Compra[] @relation("CancelaCompra")
-  comprasAutorizadasCancelacion Compra[] @relation("AutorizaCancelacionCompra")
-  gastosCancelados Gasto[] @relation("CancelaGasto")
-  gastosAutorizadosCancelacion Gasto[] @relation("AutorizaCancelacionGasto")
-  depositosRegistrados DepositoBanco[] @relation("RegistraDeposito")
-  depositosCancelados DepositoBanco[] @relation("CancelaDeposito")
-  depositosAutorizadosCancelacion DepositoBanco[] @relation("AutorizaCancelacionDeposito")
-  cotizacionesRegistradas Cotizacion[] @relation("VendedorCotizacion")
-  pagosVentaCancelados PagoVenta[] @relation("CancelaPagoVenta")
-  pagosVentaAutorizadosCancelacion PagoVenta[] @relation("AutorizaCancelacionPagoVenta")
-  pagosCompraCancelados PagoCompra[] @relation("CancelaPagoCompra")
-  pagosCompraAutorizadosCancelacion PagoCompra[] @relation("AutorizaCancelacionPagoCompra")
-  llamadasClienteRegistradas LlamadaCliente[]
-  notasClienteEscritas NotaCliente[]
-  pendientesRegistrados Pendiente[]
-  suscripcionesPush  PushSubscription[]
-  sesiones           Sesion[]
+  permisos                          PermisosUsuario?
+  ventasRegistradas                 Venta[]            @relation("VendedorVenta")
+  gastosRegistrados                 Gasto[]            @relation("RegistraGasto")
+  cortesRegistrados                 CorteCaja[]
+  ajustesSolicitados                AjusteInventario[] @relation("SolicitaAjuste")
+  ajustesAutorizados                AjusteInventario[] @relation("AutorizaAjuste")
+  itemsAutorizados                  VentaItem[]        @relation("AutorizaPrecio")
+  pagosVentaRegistrados             PagoVenta[]
+  pagosCompraRegistrados            PagoCompra[]
+  ventasCanceladas                  Venta[]            @relation("CancelaVenta")
+  ventasAutorizadasCancelacion      Venta[]            @relation("AutorizaCancelacionVenta")
+  comprasCanceladas                 Compra[]           @relation("CancelaCompra")
+  comprasAutorizadasCancelacion     Compra[]           @relation("AutorizaCancelacionCompra")
+  gastosCancelados                  Gasto[]            @relation("CancelaGasto")
+  gastosAutorizadosCancelacion      Gasto[]            @relation("AutorizaCancelacionGasto")
+  depositosRegistrados              DepositoBanco[]    @relation("RegistraDeposito")
+  depositosCancelados               DepositoBanco[]    @relation("CancelaDeposito")
+  depositosAutorizadosCancelacion   DepositoBanco[]    @relation("AutorizaCancelacionDeposito")
+  cotizacionesRegistradas           Cotizacion[]       @relation("VendedorCotizacion")
+  pagosVentaCancelados              PagoVenta[]        @relation("CancelaPagoVenta")
+  pagosVentaAutorizadosCancelacion  PagoVenta[]        @relation("AutorizaCancelacionPagoVenta")
+  pagosCompraCancelados             PagoCompra[]       @relation("CancelaPagoCompra")
+  pagosCompraAutorizadosCancelacion PagoCompra[]       @relation("AutorizaCancelacionPagoCompra")
+  llamadasClienteRegistradas        LlamadaCliente[]
+  notasClienteEscritas              NotaCliente[]
+  prospectosRegistrados             Prospecto[]
+  notasProspectoEscritas            NotaProspecto[]
+  pendientesRegistrados             Pendiente[]
+  suscripcionesPush                 PushSubscription[]
+  sesiones                          Sesion[]
 }
 
 // Suscripcion a notificaciones push del navegador (Web Push/VAPID) de un
@@ -96,34 +98,34 @@ model PermisosUsuario {
 // ---------- CATALOGO: PRODUCTOS (cortes) Y VARIANTES (marca) ----------
 
 model Producto {
-  id           String   @id @default(uuid())
-  nombre       String   // ej. "Pierna de cerdo"
-  categoriaId  String?
-  categoria    Categoria? @relation(fields: [categoriaId], references: [id])
-  creadoEn     DateTime @default(now())
+  id          String     @id @default(uuid())
+  nombre      String // ej. "Pierna de cerdo"
+  categoriaId String?
+  categoria   Categoria? @relation(fields: [categoriaId], references: [id])
+  creadoEn    DateTime   @default(now())
 
   variantes Variante[]
 }
 
 model Categoria {
   id        String     @id @default(uuid())
-  nombre    String     // ej. "Cerdo", "Res", "Pollo"
+  nombre    String // ej. "Cerdo", "Res", "Pollo"
   productos Producto[]
 }
 
 model Variante {
-  id             String   @id @default(uuid())
-  productoId     String
-  producto       Producto @relation(fields: [productoId], references: [id])
-  marca          String   // ej. "Norson", "Kowi", "Soles", "Yoreme"
-  sku            String?  @unique
-  precioVenta    Decimal  @db.Decimal(10, 2)
-  stockMinimo    Decimal  @default(0) @db.Decimal(10, 3)
-  activo         Boolean  @default(true)
-  creadoEn       DateTime @default(now())
+  id          String   @id @default(uuid())
+  productoId  String
+  producto    Producto @relation(fields: [productoId], references: [id])
+  marca       String // ej. "Norson", "Kowi", "Soles", "Yoreme"
+  sku         String?  @unique
+  precioVenta Decimal  @db.Decimal(10, 2)
+  stockMinimo Decimal  @default(0) @db.Decimal(10, 3)
+  activo      Boolean  @default(true)
+  creadoEn    DateTime @default(now())
 
-  lotes      LoteInventario[]
-  cotizacionItems CotizacionItem[]
+  lotes             LoteInventario[]
+  cotizacionItems   CotizacionItem[]
   costosProveedores CostoProveedorProducto[]
 
   @@unique([productoId, marca])
@@ -132,12 +134,12 @@ model Variante {
 // ---------- PROVEEDORES Y COMPRAS ----------
 
 model Proveedor {
-  id        String   @id @default(uuid())
-  nombre    String
-  telefono  String?
-  contacto  String?
-  compras   Compra[]
-  gastos    Gasto[]
+  id              String                   @id @default(uuid())
+  nombre          String
+  telefono        String?
+  contacto        String?
+  compras         Compra[]
+  gastos          Gasto[]
   costosProductos CostoProveedorProducto[]
 }
 
@@ -158,34 +160,34 @@ model CostoProveedorProducto {
 }
 
 model Compra {
-  id                String   @id @default(uuid())
-  proveedorId       String
-  proveedor         Proveedor @relation(fields: [proveedorId], references: [id])
-  numeroFactura     String?
-  fecha             DateTime @default(now())
-  fechaVencimiento  DateTime?
-  total             Decimal  @db.Decimal(12, 2)
-  saldoPendiente    Decimal  @db.Decimal(12, 2)
-  estadoPago        String   @default("pendiente") // pendiente | parcial | pagada
-  cancelada         Boolean  @default(false)
-  canceladaEn       DateTime?
-  canceladaPorId    String?
-  canceladaPor      Usuario? @relation("CancelaCompra", fields: [canceladaPorId], references: [id])
-  autorizadaPorId   String?
-  autorizadaPor     Usuario? @relation("AutorizaCancelacionCompra", fields: [autorizadaPorId], references: [id])
+  id               String    @id @default(uuid())
+  proveedorId      String
+  proveedor        Proveedor @relation(fields: [proveedorId], references: [id])
+  numeroFactura    String?
+  fecha            DateTime  @default(now())
+  fechaVencimiento DateTime?
+  total            Decimal   @db.Decimal(12, 2)
+  saldoPendiente   Decimal   @db.Decimal(12, 2)
+  estadoPago       String    @default("pendiente") // pendiente | parcial | pagada
+  cancelada        Boolean   @default(false)
+  canceladaEn      DateTime?
+  canceladaPorId   String?
+  canceladaPor     Usuario?  @relation("CancelaCompra", fields: [canceladaPorId], references: [id])
+  autorizadaPorId  String?
+  autorizadaPor    Usuario?  @relation("AutorizaCancelacionCompra", fields: [autorizadaPorId], references: [id])
   // Marca las compras/facturas que se cargaron como saldo heredado (con
   // Herramientas), no compras reales del dia -- para que el Corte de
   // Caja no las cuente como egreso de "hoy" cuando se cargan.
-  esCargaInicial    Boolean  @default(false)
+  esCargaInicial   Boolean   @default(false)
   // Key del objeto en R2 con la foto de la factura (ver imagenesR2.service.ts,
   // mismo bucket que gastos y respaldos). Obligatoria para compras
   // nuevas capturadas normalmente (se exige en la ruta), pero el campo
   // queda opcional en la base porque las compras de antes de este
   // cambio y las cargadas como saldo inicial no tienen foto.
-  fotoFacturaKey    String?
+  fotoFacturaKey   String?
 
-  lotes  LoteInventario[]
-  pagos  PagoCompra[]
+  lotes LoteInventario[]
+  pagos PagoCompra[]
 
   @@index([fecha])
   @@index([proveedorId])
@@ -193,14 +195,14 @@ model Compra {
 }
 
 model PagoCompra {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   compraId        String
-  compra          Compra   @relation(fields: [compraId], references: [id])
-  fecha           DateTime @default(now())
-  monto           Decimal  @db.Decimal(12, 2)
-  metodoPago      String   // efectivo | transferencia
+  compra          Compra    @relation(fields: [compraId], references: [id])
+  fecha           DateTime  @default(now())
+  monto           Decimal   @db.Decimal(12, 2)
+  metodoPago      String // efectivo | transferencia
   registradoPorId String?
-  registradoPor   Usuario? @relation(fields: [registradoPorId], references: [id])
+  registradoPor   Usuario?  @relation(fields: [registradoPorId], references: [id])
   cancelado       Boolean   @default(false)
   canceladoEn     DateTime?
   canceladoPorId  String?
@@ -212,7 +214,7 @@ model PagoCompra {
   // sola accion de "registrar pago" -- un pago que el usuario entrega a un
   // proveedor puede repartirse entre varias facturas a la vez. Permite
   // cancelar TODAS esas facturas de un solo golpe (cancelarGrupoPagoCompra).
-  grupoPagoId     String?
+  grupoPagoId        String?
   // Foto del comprobante del pago (transferencia, recibo firmado, etc.).
   // Obligatoria para pagos nuevos (ver ComprobantePagoCompraRequeridoError);
   // queda opcional en la base porque los pagos de antes no la tienen. Un
@@ -225,15 +227,15 @@ model PagoCompra {
 // ---------- INVENTARIO POR LOTES (costeo FIFO) ----------
 
 model LoteInventario {
-  id                  String   @id @default(uuid())
-  varianteId          String
-  variante            Variante @relation(fields: [varianteId], references: [id])
-  compraId            String
-  compra              Compra   @relation(fields: [compraId], references: [id])
-  costoUnitario       Decimal  @db.Decimal(10, 2)
-  cantidadInicial     Decimal  @db.Decimal(10, 3)
-  cantidadDisponible  Decimal  @db.Decimal(10, 3)
-  fechaIngreso        DateTime @default(now())
+  id                 String   @id @default(uuid())
+  varianteId         String
+  variante           Variante @relation(fields: [varianteId], references: [id])
+  compraId           String
+  compra             Compra   @relation(fields: [compraId], references: [id])
+  costoUnitario      Decimal  @db.Decimal(10, 2)
+  cantidadInicial    Decimal  @db.Decimal(10, 3)
+  cantidadDisponible Decimal  @db.Decimal(10, 3)
+  fechaIngreso       DateTime @default(now())
 
   ventaItems VentaItem[]
   ajustes    AjusteInventario[]
@@ -259,27 +261,27 @@ model Cliente {
   // lugar distinto (ej. una bodega) -- los campos "...Entrega" son
   // opcionales; cuando estan vacios, se asume que reciben en esta misma
   // direccion.
-  calle                String?
-  colonia              String?
-  ciudad               String?
-  estado               String?
-  codigoPostal         String?
-  calleEntrega         String?
-  coloniaEntrega       String?
-  ciudadEntrega        String?
-  estadoEntrega        String?
-  codigoPostalEntrega  String?
+  calle               String?
+  colonia             String?
+  ciudad              String?
+  estado              String?
+  codigoPostal        String?
+  calleEntrega        String?
+  coloniaEntrega      String?
+  ciudadEntrega       String?
+  estadoEntrega       String?
+  codigoPostalEntrega String?
   // Link al perfil/pin del negocio en Google Maps (o un Plus Code) --
   // texto libre, se guarda tal cual lo pega el usuario para poder ubicar
   // al cliente facilmente sin depender de que la direccion por partes
   // este completa o sea exacta.
-  googleMapsUrl        String?
+  googleMapsUrl       String?
   notas               String?
   permiteVentaCredito Boolean  @default(true)
   // Saldo que el cliente ya debia ANTES de usar el sistema (cartera
   // heredada). Se suma al saldo calculado de sus ventas a credito, pero
   // no es una venta real -- no afecta inventario ni reportes de ventas.
-  saldoInicial        Decimal  @db.Decimal(12, 2) @default(0)
+  saldoInicial        Decimal  @default(0) @db.Decimal(12, 2)
   fechaAlta           DateTime @default(now())
   // Que dias de la semana hay que hablarle a este cliente/prospecto para
   // ofrecerle producto -- 0=domingo ... 6=sabado (igual que Date.getDay()
@@ -297,11 +299,13 @@ model Cliente {
   // las llamadas de hoy (ver analitica.service.ts y clientes.service.ts).
   tipo                String?
 
-  ventas Venta[]
-  cotizaciones Cotizacion[]
-  llamadas LlamadaCliente[]
-  pendientes Pendiente[]
+  ventas        Venta[]
+  cotizaciones  Cotizacion[]
+  llamadas      LlamadaCliente[]
+  pendientes    Pendiente[]
   notasBitacora NotaCliente[]
+  // Prospecto del que salio este cliente (si se convirtio desde Prospectos).
+  prospectos    Prospecto[]
 }
 
 // Registro del dia de llamada de un cliente -- lo que alimenta el
@@ -348,33 +352,33 @@ model Pendiente {
 // ---------- VENTAS ----------
 
 model Venta {
-  id              String   @id @default(uuid())
-  folio           Int      @default(autoincrement())
+  id              String    @id @default(uuid())
+  folio           Int       @default(autoincrement())
   vendedorId      String
-  vendedor        Usuario  @relation("VendedorVenta", fields: [vendedorId], references: [id])
+  vendedor        Usuario   @relation("VendedorVenta", fields: [vendedorId], references: [id])
   clienteId       String
-  cliente         Cliente  @relation(fields: [clienteId], references: [id])
-  fecha           DateTime @default(now())
-  total           Decimal  @db.Decimal(12, 2)
-  saldoPendiente  Decimal  @db.Decimal(12, 2)
-  esCredito       Boolean  @default(false)
-  estadoPago      String   @default("pendiente") // pendiente | parcial | pagada
-  estadoSync      String   @default("sincronizada") // pendiente | sincronizada (para offline)
-  canalTicket     String?  // impreso | whatsapp | sms | impreso_whatsapp ...
-  cancelada       Boolean  @default(false)
+  cliente         Cliente   @relation(fields: [clienteId], references: [id])
+  fecha           DateTime  @default(now())
+  total           Decimal   @db.Decimal(12, 2)
+  saldoPendiente  Decimal   @db.Decimal(12, 2)
+  esCredito       Boolean   @default(false)
+  estadoPago      String    @default("pendiente") // pendiente | parcial | pagada
+  estadoSync      String    @default("sincronizada") // pendiente | sincronizada (para offline)
+  canalTicket     String? // impreso | whatsapp | sms | impreso_whatsapp ...
+  cancelada       Boolean   @default(false)
   canceladaEn     DateTime?
   canceladaPorId  String?
-  canceladaPor    Usuario? @relation("CancelaVenta", fields: [canceladaPorId], references: [id])
+  canceladaPor    Usuario?  @relation("CancelaVenta", fields: [canceladaPorId], references: [id])
   autorizadaPorId String?
-  autorizadaPor   Usuario? @relation("AutorizaCancelacionVenta", fields: [autorizadaPorId], references: [id])
+  autorizadaPor   Usuario?  @relation("AutorizaCancelacionVenta", fields: [autorizadaPorId], references: [id])
   // Cuando se reviso esta venta para mandarla a Meta como "Purchase" (se
   // mando, o se descarto por estar cancelada). Se manda con 6 horas de
   // retraso para no reportar ventas que se cancelan al rato -- ver
   // enviarComprasPendientesAMeta en metaCapi.service.ts. null = pendiente.
   metaRevisadaEn  DateTime?
 
-  items VentaItem[]
-  pagos PagoVenta[]
+  items      VentaItem[]
+  pagos      PagoVenta[]
   cotizacion Cotizacion?
 
   @@index([fecha])
@@ -419,44 +423,44 @@ model CotizacionItem {
 }
 
 model VentaItem {
-  id                     String   @id @default(uuid())
-  ventaId                String
-  venta                  Venta    @relation(fields: [ventaId], references: [id])
-  loteId                 String
-  lote                   LoteInventario @relation(fields: [loteId], references: [id])
-  cantidad               Decimal  @db.Decimal(10, 3)
-  precioLista            Decimal  @db.Decimal(10, 2)
-  precioUnitario         Decimal  @db.Decimal(10, 2)
-  costoUnitarioSnapshot  Decimal  @db.Decimal(10, 2)
-  autorizadoPorId        String?
-  autorizadoPor          Usuario? @relation("AutorizaPrecio", fields: [autorizadoPorId], references: [id])
-  motivoAutorizacion     String?
+  id                    String         @id @default(uuid())
+  ventaId               String
+  venta                 Venta          @relation(fields: [ventaId], references: [id])
+  loteId                String
+  lote                  LoteInventario @relation(fields: [loteId], references: [id])
+  cantidad              Decimal        @db.Decimal(10, 3)
+  precioLista           Decimal        @db.Decimal(10, 2)
+  precioUnitario        Decimal        @db.Decimal(10, 2)
+  costoUnitarioSnapshot Decimal        @db.Decimal(10, 2)
+  autorizadoPorId       String?
+  autorizadoPor         Usuario?       @relation("AutorizaPrecio", fields: [autorizadoPorId], references: [id])
+  motivoAutorizacion    String?
 
   pagoAsignaciones PagoAsignacion[]
 }
 
 model PagoVenta {
-  id             String   @id @default(uuid())
-  ventaId        String
-  venta          Venta    @relation(fields: [ventaId], references: [id])
-  fecha          DateTime @default(now())
-  monto          Decimal  @db.Decimal(12, 2)
-  metodoPago     String
-  registradoPorId String?
-  registradoPor  Usuario? @relation(fields: [registradoPorId], references: [id])
-  cancelado       Boolean   @default(false)
-  canceladoEn     DateTime?
-  canceladoPorId  String?
-  canceladoPor    Usuario?  @relation("CancelaPagoVenta", fields: [canceladoPorId], references: [id])
-  autorizadoPorId String?
-  autorizadoPor   Usuario?  @relation("AutorizaCancelacionPagoVenta", fields: [autorizadoPorId], references: [id])
+  id                 String    @id @default(uuid())
+  ventaId            String
+  venta              Venta     @relation(fields: [ventaId], references: [id])
+  fecha              DateTime  @default(now())
+  monto              Decimal   @db.Decimal(12, 2)
+  metodoPago         String
+  registradoPorId    String?
+  registradoPor      Usuario?  @relation(fields: [registradoPorId], references: [id])
+  cancelado          Boolean   @default(false)
+  canceladoEn        DateTime?
+  canceladoPorId     String?
+  canceladoPor       Usuario?  @relation("CancelaPagoVenta", fields: [canceladoPorId], references: [id])
+  autorizadoPorId    String?
+  autorizadoPor      Usuario?  @relation("AutorizaCancelacionPagoVenta", fields: [autorizadoPorId], references: [id])
   // Comparten el mismo grupoPagoId todos los PagoVenta creados en UNA
   // sola accion de "registrar pago" -- ya sea un abono a una sola nota
   // repartido en varios metodos, o un pago repartido entre varias notas
   // (o ambos a la vez). Sirve para poder reimprimir despues el
   // comprobante COMPLETO tal como se genero la primera vez, en vez de
   // solo la parte de una nota individual.
-  grupoPagoId    String?
+  grupoPagoId        String?
   // Obligatoria cuando metodoPago es transferencia (ver validacion en
   // cartera.service.ts) -- foto del comprobante de la transferencia,
   // mismo patron que Gasto.fotoComprobanteKey.
@@ -480,18 +484,18 @@ model PagoAsignacion {
 // ---------- AJUSTES DE INVENTARIO (merma, requieren autorizacion) ----------
 
 model AjusteInventario {
-  id                String   @id @default(uuid())
-  loteId            String
-  lote              LoteInventario @relation(fields: [loteId], references: [id])
-  solicitadoPorId   String
-  solicitadoPor     Usuario  @relation("SolicitaAjuste", fields: [solicitadoPorId], references: [id])
-  autorizadoPorId   String?
-  autorizadoPor     Usuario? @relation("AutorizaAjuste", fields: [autorizadoPorId], references: [id])
-  tipo              String   // merma | correccion_positiva | correccion_negativa
-  cantidad          Decimal  @db.Decimal(10, 3)
-  motivo            String
-  impactoUtilidad   Decimal  @db.Decimal(12, 2)
-  fecha             DateTime @default(now())
+  id              String         @id @default(uuid())
+  loteId          String
+  lote            LoteInventario @relation(fields: [loteId], references: [id])
+  solicitadoPorId String
+  solicitadoPor   Usuario        @relation("SolicitaAjuste", fields: [solicitadoPorId], references: [id])
+  autorizadoPorId String?
+  autorizadoPor   Usuario?       @relation("AutorizaAjuste", fields: [autorizadoPorId], references: [id])
+  tipo            String // merma | correccion_positiva | correccion_negativa
+  cantidad        Decimal        @db.Decimal(10, 3)
+  motivo          String
+  impactoUtilidad Decimal        @db.Decimal(12, 2)
+  fecha           DateTime       @default(now())
 }
 
 // ---------- GASTOS ----------
@@ -504,28 +508,28 @@ model CategoriaGasto {
 }
 
 model Gasto {
-  id             String         @id @default(uuid())
-  categoriaId    String
-  categoria      CategoriaGasto @relation(fields: [categoriaId], references: [id])
-  proveedorId    String?
-  proveedor      Proveedor?     @relation(fields: [proveedorId], references: [id])
-  registradoPorId String
-  registradoPor  Usuario        @relation("RegistraGasto", fields: [registradoPorId], references: [id])
-  concepto       String
-  monto          Decimal        @db.Decimal(12, 2)
-  metodoPago     String
-  fecha          DateTime       @default(now())
+  id                 String         @id @default(uuid())
+  categoriaId        String
+  categoria          CategoriaGasto @relation(fields: [categoriaId], references: [id])
+  proveedorId        String?
+  proveedor          Proveedor?     @relation(fields: [proveedorId], references: [id])
+  registradoPorId    String
+  registradoPor      Usuario        @relation("RegistraGasto", fields: [registradoPorId], references: [id])
+  concepto           String
+  monto              Decimal        @db.Decimal(12, 2)
+  metodoPago         String
+  fecha              DateTime       @default(now())
   // Key del objeto en R2 con la foto del comprobante (ver backup.service.ts,
   // mismo bucket). Obligatoria para gastos nuevos (se exige en la ruta),
   // pero el campo queda opcional en la base porque los gastos de antes de
   // este cambio no tienen foto.
   fotoComprobanteKey String?
-  cancelado       Boolean   @default(false)
-  canceladoEn     DateTime?
-  canceladoPorId  String?
-  canceladoPor    Usuario?  @relation("CancelaGasto", fields: [canceladoPorId], references: [id])
-  autorizadoPorId String?
-  autorizadoPor   Usuario?  @relation("AutorizaCancelacionGasto", fields: [autorizadoPorId], references: [id])
+  cancelado          Boolean        @default(false)
+  canceladoEn        DateTime?
+  canceladoPorId     String?
+  canceladoPor       Usuario?       @relation("CancelaGasto", fields: [canceladoPorId], references: [id])
+  autorizadoPorId    String?
+  autorizadoPor      Usuario?       @relation("AutorizaCancelacionGasto", fields: [autorizadoPorId], references: [id])
 
   @@index([fecha])
   @@index([categoriaId])
@@ -537,21 +541,21 @@ model Gasto {
 // transferencia). No es venta ni gasto -- no afecta utilidad, solo
 // mueve saldoEfectivoActual a saldoBancoActual en Configuracion.
 model DepositoBanco {
-  id              String    @id @default(uuid())
-  monto           Decimal   @db.Decimal(12, 2)
-  notas           String?
+  id                 String    @id @default(uuid())
+  monto              Decimal   @db.Decimal(12, 2)
+  notas              String?
   // Siempre obligatoria (ver validacion en la ruta) -- foto del
   // comprobante del deposito, mismo patron que Gasto.fotoComprobanteKey.
   fotoComprobanteKey String?
-  fecha           DateTime  @default(now())
-  registradoPorId String
-  registradoPor   Usuario   @relation("RegistraDeposito", fields: [registradoPorId], references: [id])
-  cancelado       Boolean   @default(false)
-  canceladoEn     DateTime?
-  canceladoPorId  String?
-  canceladoPor    Usuario?  @relation("CancelaDeposito", fields: [canceladoPorId], references: [id])
-  autorizadoPorId String?
-  autorizadoPor   Usuario?  @relation("AutorizaCancelacionDeposito", fields: [autorizadoPorId], references: [id])
+  fecha              DateTime  @default(now())
+  registradoPorId    String
+  registradoPor      Usuario   @relation("RegistraDeposito", fields: [registradoPorId], references: [id])
+  cancelado          Boolean   @default(false)
+  canceladoEn        DateTime?
+  canceladoPorId     String?
+  canceladoPor       Usuario?  @relation("CancelaDeposito", fields: [canceladoPorId], references: [id])
+  autorizadoPorId    String?
+  autorizadoPor      Usuario?  @relation("AutorizaCancelacionDeposito", fields: [autorizadoPorId], references: [id])
 
   @@index([fecha])
   @@index([registradoPorId])
@@ -563,36 +567,36 @@ model DepositoBanco {
 // registro UNICO (siempre id = 'singleton') -- no hay varias
 // configuraciones, solo una para todo el negocio.
 model Configuracion {
-  id                String  @id @default("singleton")
+  id String @id @default("singleton")
 
   // Datos del negocio (encabezado del recibo)
-  nombreNegocio     String  @default("")
-  logoBase64        String? // logo guardado como texto base64, se muestra tal cual en el recibo
-  telefono          String  @default("")
-  direccion         String  @default("")
-  notasNegocio      String  @default("")
+  nombreNegocio String  @default("")
+  logoBase64    String? // logo guardado como texto base64, se muestra tal cual en el recibo
+  telefono      String  @default("")
+  direccion     String  @default("")
+  notasNegocio  String  @default("")
 
   // Configuracion del recibo
   mostrarDatosCliente Boolean @default(true)
-  encabezadoRecibo   String  @default("")
-  piePaginaRecibo    String  @default("")
+  encabezadoRecibo    String  @default("")
+  piePaginaRecibo     String  @default("")
 
   // Configuracion de la impresora
-  anchoPapelMm       Int     @default(58) // 58 o 80
-  imprimirDosVeces   Boolean @default(false)
+  anchoPapelMm     Int     @default(58) // 58 o 80
+  imprimirDosVeces Boolean @default(false)
 
   // Saldo bancario que el sistema lleva solo: aumenta con cada venta,
   // abono o pago en transferencia; disminuye con cada gasto, compra o
   // pago a proveedor en transferencia. Se puede corregir manualmente
   // desde Configuracion cuando haga falta reconciliar.
-  saldoBancoActual   Decimal  @db.Decimal(14, 2) @default(0)
+  saldoBancoActual Decimal @default(0) @db.Decimal(14, 2)
 
   // Lo mismo que saldoBancoActual, pero para efectivo: sube con ventas y
   // abonos en efectivo, baja con gastos, compras y pagos a proveedor en
   // efectivo. El default es el saldo inicial real del negocio.
-  saldoEfectivoActual Decimal @db.Decimal(14, 2) @default(52937)
+  saldoEfectivoActual Decimal @default(52937) @db.Decimal(14, 2)
 
-  actualizadoEn      DateTime @updatedAt
+  actualizadoEn DateTime @updatedAt
 }
 
 // ---------- CORTE DE CAJA DIARIO ----------
@@ -604,23 +608,23 @@ model Configuracion {
 // un corte desde el historico solo se pueden corregir los montos
 // contados a mano (efectivoContado, saldoBancoContado).
 model CorteCaja {
-  id                String   @id @default(uuid())
-  registradoPorId   String
-  registradoPor     Usuario  @relation(fields: [registradoPorId], references: [id])
-  fecha             DateTime // dia que representa este corte, normalizado a medianoche
-  creadoEn          DateTime @default(now())
-  actualizadoEn     DateTime @updatedAt
-  efectivoContado   Decimal  @db.Decimal(12, 2)
-  saldoBancoContado Decimal  @db.Decimal(12, 2)
-  utilidadDia       Decimal  @db.Decimal(12, 2) @default(0)
-  gastosDia         Decimal  @db.Decimal(12, 2) @default(0)
-  valorInventario   Decimal  @db.Decimal(12, 2) @default(0)
-  balanzaTotal      Decimal  @db.Decimal(12, 2) @default(0)
+  id                             String   @id @default(uuid())
+  registradoPorId                String
+  registradoPor                  Usuario  @relation(fields: [registradoPorId], references: [id])
+  fecha                          DateTime // dia que representa este corte, normalizado a medianoche
+  creadoEn                       DateTime @default(now())
+  actualizadoEn                  DateTime @updatedAt
+  efectivoContado                Decimal  @db.Decimal(12, 2)
+  saldoBancoContado              Decimal  @db.Decimal(12, 2)
+  utilidadDia                    Decimal  @default(0) @db.Decimal(12, 2)
+  gastosDia                      Decimal  @default(0) @db.Decimal(12, 2)
+  valorInventario                Decimal  @default(0) @db.Decimal(12, 2)
+  balanzaTotal                   Decimal  @default(0) @db.Decimal(12, 2)
   // Nota libre para cuando el corte no cuadra y ya se sabe (o se sospecha)
   // por que -- para no tener que acordarse despues, queda grabada con el
   // corte y se puede agregar/editar tanto al capturarlo como despues
   // desde el historico.
-  observacion       String?
+  observacion                    String?
   // Fotografia de las facturas de proveedor pendientes de pago al momento
   // de este corte (agrupadas por proveedor y antiguedad) -- se guarda tal
   // cual para poder reimprimir el corte despues mostrando lo que se debia
@@ -643,4 +647,64 @@ model NotaCliente {
   creadoEn  DateTime @default(now())
 
   @@index([clienteId])
+}
+
+// ---------- PROSPECTOS ----------
+
+// Gente que todavia no compra: negocios visitados en fisico o que escribieron
+// por redes y no compraron en el momento. Se mantienen aparte de Cliente para
+// no ensuciar la lista de clientes, cartera, analitica ni los Leads de Meta
+// (un prospecto solo se vuelve Cliente -- y se reporta a Meta, si vino de
+// anuncio -- cuando de verdad se convierte).
+model Prospecto {
+  id              String    @id @default(uuid())
+  nombre          String // negocio o persona
+  nombreContacto  String?
+  // Opcional aqui (en la visita a veces no lo dan); se exige un celular
+  // valido de 10 digitos hasta convertirlo en cliente.
+  telefono        String?
+  colonia         String?
+  ciudad          String?
+  googleMapsUrl   String?
+  // visita | anuncio | redes | recomendacion | otro
+  origen          String
+  // Que le interesa / que compra hoy y a quien (texto libre).
+  interes         String?
+  // alto | medio | bajo -- que tan probable se ve que compre.
+  nivelInteres    String    @default("medio")
+  // activo | convertido | descartado
+  estado          String    @default("activo")
+  // Siguiente vez que hay que buscarlo, normalizado a medianoche, y para que.
+  // Null = sin seguimiento agendado.
+  proximoContacto DateTime?
+  motivoContacto  String?
+  // Por que se descarto (no le interesa, ya cerro, etc.).
+  motivoDescarte  String?
+  clienteId       String?
+  cliente         Cliente?  @relation(fields: [clienteId], references: [id], onDelete: SetNull)
+  convertidoEn    DateTime?
+  registradoPorId String
+  registradoPor   Usuario   @relation(fields: [registradoPorId], references: [id])
+  creadoEn        DateTime  @default(now())
+  actualizadoEn   DateTime  @updatedAt
+
+  notas NotaProspecto[]
+
+  @@index([estado, proximoContacto])
+}
+
+// Bitacora de contactos con un prospecto: cada visita, llamada, mensaje o
+// nota queda con fecha, tipo y quien la registro.
+model NotaProspecto {
+  id          String    @id @default(uuid())
+  prospectoId String
+  prospecto   Prospecto @relation(fields: [prospectoId], references: [id], onDelete: Cascade)
+  // visita | llamada | whatsapp | redes | nota
+  tipo        String    @default("nota")
+  texto       String
+  autorId     String
+  autor       Usuario   @relation(fields: [autorId], references: [id])
+  creadoEn    DateTime  @default(now())
+
+  @@index([prospectoId])
 }

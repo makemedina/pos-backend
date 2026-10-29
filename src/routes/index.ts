@@ -19,6 +19,21 @@ import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services
 import { corteDelDia, guardarCorteCaja, listarCortes, actualizarCorteCaja, eliminarCorteCaja, CorteYaExisteError } from '../services/corte.service';
 import { fechaLocalDesdeString } from '../utils/fecha';
 import {
+  listarProspectos,
+  prospectosPorContactarHoy,
+  obtenerProspecto,
+  crearProspecto,
+  actualizarProspecto,
+  agregarNotaProspecto,
+  eliminarNotaProspecto,
+  convertirProspectoEnCliente,
+  eliminarProspecto,
+  DatoProspectoInvalidoError,
+  NotaProspectoAjenaError,
+  ProspectoYaConvertidoError,
+  type DatosProspecto,
+} from '../services/prospectos.service';
+import {
   listarPendientes,
   listarPendientesDeHoy,
   crearPendiente,
@@ -1776,6 +1791,130 @@ router.post('/clientes/:id/llamadas/hoy', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al registrar la llamada' });
+  }
+});
+
+// ---------- PROSPECTOS ----------
+
+// Toma del body solo los campos editables de un prospecto; "proximoContacto"
+// llega como "YYYY-MM-DD" (o vacio/null para quitar el seguimiento).
+function datosProspectoDesdeBody(body: Record<string, unknown>): DatosProspecto {
+  const datos: DatosProspecto = {};
+  for (const campo of ['nombre', 'origen', 'nivelInteres', 'estado'] as const) {
+    if (body[campo] !== undefined) datos[campo] = String(body[campo]);
+  }
+  for (const campo of ['nombreContacto', 'telefono', 'colonia', 'ciudad', 'googleMapsUrl', 'interes', 'motivoContacto', 'motivoDescarte'] as const) {
+    if (body[campo] !== undefined) datos[campo] = body[campo] === null ? null : String(body[campo]);
+  }
+  if (body.proximoContacto !== undefined) {
+    datos.proximoContacto = body.proximoContacto ? fechaLocalDesdeString(String(body.proximoContacto)) : null;
+  }
+  return datos;
+}
+
+function responderErrorProspecto(err: unknown, res: import('express').Response, mensaje: string) {
+  if (err instanceof DatoProspectoInvalidoError || err instanceof ProspectoYaConvertidoError) {
+    return res.status(400).json({ error: err.message });
+  }
+  if (err instanceof NotaProspectoAjenaError) {
+    return res.status(403).json({ error: err.message });
+  }
+  if ((err as { code?: string })?.code === 'P2025') {
+    return res.status(404).json({ error: 'No se encontró el prospecto.' });
+  }
+  console.error(err);
+  return res.status(500).json({ error: mensaje });
+}
+
+router.get('/prospectos', async (req, res) => {
+  try {
+    res.json(await listarProspectos((req.query.estado as string) || 'activo'));
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al cargar los prospectos');
+  }
+});
+
+// IMPORTANTE: antes de '/prospectos/:id' para que "hoy" no se tome como id.
+router.get('/prospectos/hoy', async (_req, res) => {
+  try {
+    res.json(await prospectosPorContactarHoy());
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al cargar los seguimientos de hoy');
+  }
+});
+
+router.get('/prospectos/:id', async (req, res) => {
+  try {
+    res.json(await obtenerProspecto(req.params.id));
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al cargar el prospecto');
+  }
+});
+
+router.post('/prospectos', async (req, res) => {
+  try {
+    const datos = datosProspectoDesdeBody(req.body);
+    const notaInicial = typeof req.body.notaInicial === 'string' ? req.body.notaInicial : undefined;
+    res.status(201).json(await crearProspecto({ ...datos, notaInicial }, req.usuario!.id));
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al guardar el prospecto');
+  }
+});
+
+router.put('/prospectos/:id', async (req, res) => {
+  try {
+    res.json(await actualizarProspecto(req.params.id, datosProspectoDesdeBody(req.body)));
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al actualizar el prospecto');
+  }
+});
+
+router.post('/prospectos/:id/notas', async (req, res) => {
+  try {
+    const { tipo, texto, proximoContacto, motivoContacto } = req.body;
+    res.status(201).json(
+      await agregarNotaProspecto(
+        req.params.id,
+        {
+          tipo: String(tipo || 'nota'),
+          texto: typeof texto === 'string' ? texto : '',
+          ...(proximoContacto !== undefined
+            ? { proximoContacto: proximoContacto ? fechaLocalDesdeString(String(proximoContacto)) : null }
+            : {}),
+          motivoContacto: motivoContacto ? String(motivoContacto) : null,
+        },
+        req.usuario!.id
+      )
+    );
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al guardar la nota');
+  }
+});
+
+router.delete('/prospectos/notas/:notaId', async (req, res) => {
+  try {
+    await eliminarNotaProspecto(req.params.notaId, req.usuario!.id, req.usuario!.rolBase === 'administrador');
+    res.status(204).end();
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al borrar la nota');
+  }
+});
+
+router.post('/prospectos/:id/convertir', async (req, res) => {
+  try {
+    const telefono = typeof req.body.telefono === 'string' ? req.body.telefono : undefined;
+    res.json(await convertirProspectoEnCliente(req.params.id, telefono, req.usuario!.id));
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al convertir el prospecto en cliente');
+  }
+});
+
+router.delete('/prospectos/:id', requiereAdmin, async (req, res) => {
+  try {
+    await eliminarProspecto(req.params.id);
+    res.status(204).end();
+  } catch (err) {
+    responderErrorProspecto(err, res, 'Error al eliminar el prospecto');
   }
 });
 
