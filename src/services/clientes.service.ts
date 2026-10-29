@@ -593,3 +593,40 @@ export async function actualizarLlamadaCliente(
     },
   });
 }
+
+/** Bitacora de notas del cliente, de la mas nueva a la mas vieja. */
+export async function listarNotasCliente(clienteId: string) {
+  const notas = await prisma.notaCliente.findMany({
+    where: { clienteId },
+    include: { autor: { select: { nombre: true } } },
+    orderBy: { creadoEn: 'desc' },
+  });
+  return notas.map((n) => ({
+    id: n.id,
+    texto: n.texto,
+    creadoEn: n.creadoEn,
+    autorId: n.autorId,
+    autorNombre: n.autor.nombre,
+  }));
+}
+
+export async function agregarNotaCliente(clienteId: string, texto: string, autorId: string) {
+  const nota = await prisma.notaCliente.create({
+    data: { clienteId, texto, autorId },
+    include: { autor: { select: { nombre: true } } },
+  });
+  return { id: nota.id, texto: nota.texto, creadoEn: nota.creadoEn, autorId: nota.autorId, autorNombre: nota.autor.nombre };
+}
+
+export class NotaClienteAjenaError extends Error {
+  constructor() {
+    super('Solo quien escribió la nota o un administrador la puede borrar.');
+  }
+}
+
+/** Borra una nota de la bitacora -- solo su autor o un administrador. */
+export async function eliminarNotaCliente(notaId: string, usuarioId: string, esAdmin: boolean) {
+  const nota = await prisma.notaCliente.findUniqueOrThrow({ where: { id: notaId } });
+  if (nota.autorId !== usuarioId && !esAdmin) throw new NotaClienteAjenaError();
+  await prisma.notaCliente.delete({ where: { id: notaId } });
+}

@@ -47,6 +47,7 @@ model Usuario {
   pagosCompraCancelados PagoCompra[] @relation("CancelaPagoCompra")
   pagosCompraAutorizadosCancelacion PagoCompra[] @relation("AutorizaCancelacionPagoCompra")
   llamadasClienteRegistradas LlamadaCliente[]
+  notasClienteEscritas NotaCliente[]
   pendientesRegistrados Pendiente[]
   suscripcionesPush  PushSubscription[]
   sesiones           Sesion[]
@@ -300,6 +301,7 @@ model Cliente {
   cotizaciones Cotizacion[]
   llamadas LlamadaCliente[]
   pendientes Pendiente[]
+  notasBitacora NotaCliente[]
 }
 
 // Registro del dia de llamada de un cliente -- lo que alimenta el
@@ -626,4 +628,19 @@ model CorteCaja {
   facturasPendientesPorProveedor Json?
 
   @@unique([fecha])
+}
+
+// Bitacora de notas de un cliente (pestana "Notas" de su ficha): cada nota
+// queda con fecha y quien la escribio, en vez de un solo texto que se
+// sobrescribe como Cliente.notas.
+model NotaCliente {
+  id        String   @id @default(uuid())
+  clienteId String
+  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  texto     String
+  autorId   String
+  autor     Usuario  @relation(fields: [autorId], references: [id])
+  creadoEn  DateTime @default(now())
+
+  @@index([clienteId])
 }

@@ -217,7 +217,7 @@ export async function registrarPagoCompra(
   registradoPorId: string,
   fotoComprobanteKey: string | undefined
 ) {
-  if (!fotoComprobanteKey) throw new ComprobantePagoCompraRequeridoError();
+  if (!fotoComprobanteKey && metodoPago !== 'efectivo') throw new ComprobantePagoCompraRequeridoError();
   const grupoPagoId = randomUUID();
   return prisma.$transaction(async (tx) => {
     const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId, undefined, grupoPagoId, fotoComprobanteKey);
@@ -247,7 +247,7 @@ export async function registrarPagoMultiCompra(
   if (asignacionesValidas.length === 0) {
     throw new MontoPagoCompraInvalidoError('Debes asignar un monto mayor a cero a al menos una factura');
   }
-  if (!fotoComprobanteKey) throw new ComprobantePagoCompraRequeridoError();
+  if (!fotoComprobanteKey && metodoPago !== 'efectivo') throw new ComprobantePagoCompraRequeridoError();
 
   const grupoPagoId = randomUUID();
 
@@ -301,7 +301,7 @@ export async function pagosCompra(compraId: string) {
 
 export class ComprobantePagoCompraRequeridoError extends Error {
   constructor() {
-    super('Sube la foto del comprobante del pago (transferencia o recibo firmado por el proveedor).');
+    super('Sube la foto del comprobante de la transferencia.');
   }
 }
 

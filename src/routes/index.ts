@@ -48,6 +48,10 @@ import {
   movimientosDeCliente,
   ultimosPreciosCliente,
   actualizarDiasLlamadaCliente,
+  listarNotasCliente,
+  agregarNotaCliente,
+  eliminarNotaCliente,
+  NotaClienteAjenaError,
   listarLlamadasDeHoy,
   actualizarLlamadaCliente,
 } from '../services/clientes.service';
@@ -1698,6 +1702,41 @@ router.put('/clientes/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar el cliente' });
+  }
+});
+
+router.get('/clientes/:id/notas', async (req, res) => {
+  try {
+    res.json(await listarNotasCliente(req.params.id));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al cargar las notas del cliente' });
+  }
+});
+
+router.post('/clientes/:id/notas', async (req, res) => {
+  try {
+    const texto = typeof req.body.texto === 'string' ? req.body.texto.trim() : '';
+    if (!texto) {
+      return res.status(400).json({ error: 'Escribe la nota antes de guardarla.' });
+    }
+    res.status(201).json(await agregarNotaCliente(req.params.id, texto, req.usuario!.id));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al guardar la nota' });
+  }
+});
+
+router.delete('/clientes/notas/:notaId', async (req, res) => {
+  try {
+    await eliminarNotaCliente(req.params.notaId, req.usuario!.id, req.usuario!.rolBase === 'administrador');
+    res.status(204).end();
+  } catch (err) {
+    if (err instanceof NotaClienteAjenaError) {
+      return res.status(403).json({ error: err.message });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al borrar la nota' });
   }
 });
 
