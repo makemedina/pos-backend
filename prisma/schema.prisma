@@ -708,3 +708,25 @@ model NotaProspecto {
 
   @@index([prospectoId])
 }
+
+// ---------- WHATSAPP (anuncios de clic a WhatsApp) ----------
+
+// Cada chat que alguien abre desde un anuncio de "clic a WhatsApp". Llega
+// por el webhook de la API de WhatsApp (routes/whatsappWebhook.ts) y trae
+// ctwaClid, el id del clic en el anuncio: con el, Meta liga la venta al
+// anuncio exacto sin depender de que el telefono coincida con una cuenta.
+model ReferidoWhatsapp {
+  id         String   @id @default(uuid())
+  // Id del mensaje de WhatsApp; Meta puede reenviar el mismo webhook.
+  mensajeId  String   @unique
+  // Normalizado como en metaCapi.service (52 + 10 digitos).
+  telefono   String
+  ctwaClid   String
+  // Id del anuncio (source_type "ad") y su titulo, para saber cual fue.
+  sourceId   String?
+  sourceType String?
+  headline   String?
+  recibidoEn DateTime @default(now())
+
+  @@index([telefono, recibidoEn])
+}

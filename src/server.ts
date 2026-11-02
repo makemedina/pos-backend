@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { router } from './routes';
+import { whatsappWebhook } from './routes/whatsappWebhook';
 import { iniciarTareasProgramadas } from './cron';
 
 dotenv.config();
@@ -17,6 +18,9 @@ const origenesPermitidos = process.env.ALLOWED_ORIGINS
   : ['https://pos-frontend-258.pages.dev', 'https://ventas.mrcarnes.com', 'http://localhost:5173'];
 
 app.use(cors({ origin: origenesPermitidos }));
+
+// Antes de express.json: necesita el cuerpo crudo para validar la firma de Meta.
+app.use('/webhooks/whatsapp', whatsappWebhook);
 
 app.use(express.json({ limit: '5mb' }));
 

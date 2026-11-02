@@ -21,11 +21,19 @@ import { prisma } from '../prisma';
 // una tarea programada (enviarComprasPendientesAMeta): Meta no permite
 // borrar una compra ya recibida, y casi todas las cancelaciones pasan en
 // las primeras horas, asi que esperar evita reportarle ventas canceladas.
+//
+// Si el cliente abrio el chat desde un anuncio en los ultimos 7 dias y el
+// webhook de WhatsApp guardo el clic (ReferidoWhatsapp), el evento se manda
+// como "business_messaging" con ese ctwa_clid y Meta lo atribuye al anuncio
+// exacto. Requiere META_WABA_ID; META_WA_DATASET_ID es el dataset ligado a
+// la cuenta de WhatsApp (si no se define, se usa META_DATASET_ID).
 
 const DATASET_ID = process.env.META_DATASET_ID;
 const TOKEN = process.env.META_CAPI_TOKEN;
 const TEST_EVENT_CODE = process.env.META_TEST_EVENT_CODE || undefined;
 const API_VERSION = process.env.META_API_VERSION || 'v24.0';
+const WABA_ID = process.env.META_WABA_ID;
+const WA_DATASET_ID = process.env.META_WA_DATASET_ID || DATASET_ID;
 
 const metaConfigurado = !!(DATASET_ID && TOKEN);
 
@@ -35,6 +43,9 @@ const MAX_ANTIGUEDAD_SEG = 7 * 24 * 60 * 60;
 // En los 90 dias previos a este cambio, el 97% de las ventas canceladas se
 // cancelaron dentro de las primeras 6 horas.
 const RETRASO_COMPRA_HORAS = 6;
+
+// Meta atribuye por clic hasta 7 dias despues; un clic mas viejo ya no cuenta.
+const VIGENCIA_CLIC_SEG = 7 * 24 * 60 * 60;
 
 function sha256(valor: string): string {
   return createHash('sha256').update(valor).digest('hex');
@@ -120,13 +131,14 @@ interface EventoMeta {
   event_time: number;
   event_id: string;
   action_source: string;
-  user_data: Record<string, string[]>;
+  messaging_channel?: string;
+  user_data: Record<string, string | string[]>;
   custom_data?: Record<string, unknown>;
 }
 
-async function enviarEventos(eventos: EventoMeta[]) {
+async function enviarEventos(eventos: EventoMeta[], datasetId = DATASET_ID) {
   // El token va en el body (no en la URL) para que no quede en logs de proxies.
-  const url = `https://graph.facebook.com/${API_VERSION}/${DATASET_ID}/events`;
+  const url = `https://graph.facebook.com/${API_VERSION}/${datasetId}/events`;
   const respuesta = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -142,6 +154,49 @@ function eventTimeValido(fecha: Date): number | null {
   const segundos = Math.floor(fecha.getTime() / 1000);
   if (Date.now() / 1000 - segundos > MAX_ANTIGUEDAD_SEG) return null;
   return segundos;
+}
+
+/** El clic de anuncio mas reciente de ese telefono en los 7 dias previos a `fecha`. */
+async function clicDeAnuncio(telefono: string | null, fecha: Date): Promise<string | null> {
+  const numero = normalizarTelefono(telefono);
+  if (!WABA_ID || !numero) return null;
+  const referido = await prisma.referidoWhatsapp.findFirst({
+    where: {
+      telefono: numero,
+      recibidoEn: { lte: fecha, gte: new Date(fecha.getTime() - VIGENCIA_CLIC_SEG * 1000) },
+    },
+    orderBy: { recibidoEn: 'desc' },
+    select: { ctwaClid: true },
+  });
+  return referido?.ctwaClid ?? null;
+}
+
+/**
+ * Manda el evento por la via que mejor atribuye: con clic de anuncio,
+ * como business_messaging al dataset de WhatsApp; sin el, como "chat" y
+ * Meta lo cruza solo por los datos del cliente. businessEventName es el
+ * nombre que pide Meta para business_messaging (ej. Lead -> LeadSubmitted).
+ */
+async function enviarEventoCliente(
+  evento: EventoMeta,
+  telefono: string | null,
+  fecha: Date,
+  businessEventName = evento.event_name,
+) {
+  const ctwaClid = await clicDeAnuncio(telefono, fecha);
+  if (!ctwaClid) return enviarEventos([evento]);
+  await enviarEventos(
+    [
+      {
+        ...evento,
+        event_name: businessEventName,
+        action_source: 'business_messaging',
+        messaging_channel: 'whatsapp',
+        user_data: { ...evento.user_data, whatsapp_business_account_id: WABA_ID!, ctwa_clid: ctwaClid },
+      },
+    ],
+    WA_DATASET_ID,
+  );
 }
 
 /**
@@ -160,7 +215,7 @@ async function enviarCompra(ventaId: string) {
   const eventTime = eventTimeValido(venta.fecha);
   if (!eventTime) return;
 
-  await enviarEventos([
+  await enviarEventoCliente(
     {
       event_name: 'Purchase',
       event_time: eventTime,
@@ -176,7 +231,9 @@ async function enviarCompra(ventaId: string) {
         origen_cliente: venta.cliente.origen ?? 'sin_dato',
       },
     },
-  ]);
+    venta.cliente.telefono,
+    venta.fecha,
+  );
 }
 
 /**
@@ -192,7 +249,7 @@ async function enviarClienteNuevo(clienteId: string) {
   const eventTime = eventTimeValido(cliente.fechaAlta);
   if (!eventTime) return;
 
-  await enviarEventos([
+  await enviarEventoCliente(
     {
       event_name: 'Lead',
       event_time: eventTime,
@@ -200,7 +257,10 @@ async function enviarClienteNuevo(clienteId: string) {
       action_source: 'chat',
       user_data: construirUserData(cliente),
     },
-  ]);
+    cliente.telefono,
+    cliente.fechaAlta,
+    'LeadSubmitted',
+  );
 }
 
 let enviandoCompras = false;
