@@ -1227,7 +1227,8 @@ router.post('/proveedores/:id/pagos', requierePermiso('puedeRegistrarCompras'), 
       metodoPago,
       req.usuario!.id,
       fotoComprobanteKey,
-      montoEntregado
+      montoEntregado,
+      req.body.usarSaldoAFavor === 'true'
     );
     res.status(201).json(resultado);
   } catch (err) {

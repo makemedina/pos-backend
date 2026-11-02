@@ -356,8 +356,12 @@ export interface AsignacionPagoMultipleCompra {
  * lado de clientes: todo en una sola transaccion, todo o nada.
  *
  * montoEntregado (opcional) es lo que de verdad se le entrego: si es mas
- * que la suma de las asignaciones, el sobrante se carga a la ultima
- * factura y aplicarPagoCompra lo manda al saldo a favor del proveedor.
+ * que lo que se paga en dinero, el sobrante se carga a la ultima factura y
+ * aplicarPagoCompra lo manda al saldo a favor del proveedor.
+ *
+ * usarSaldoAFavor: cada factura se cubre primero con el saldo a favor del
+ * proveedor (hasta donde alcance) y lo que falte con metodoPago -- todo
+ * dentro del mismo grupoPagoId, para cancelarlo junto.
  */
 export async function registrarPagoMultiCompra(
   proveedorId: string,
@@ -365,53 +369,77 @@ export async function registrarPagoMultiCompra(
   metodoPago: string,
   registradoPorId: string,
   fotoComprobanteKey: string | undefined,
-  montoEntregado?: number
+  montoEntregado?: number,
+  usarSaldoAFavor = false
 ) {
-  const asignacionesValidas = asignaciones.filter((a) => a.monto > 0).map((a) => ({ ...a }));
+  const asignacionesValidas = asignaciones.filter((a) => a.monto > 0);
   if (asignacionesValidas.length === 0) {
     throw new MontoPagoCompraInvalidoError('Debes asignar un monto mayor a cero a al menos una factura');
   }
-  if (montoEntregado !== undefined && metodoPago !== 'saldo_favor') {
-    const totalAsignado = asignacionesValidas.reduce((acc, a) => acc + a.monto, 0);
-    const sobrante = redondearCentavos(montoEntregado - totalAsignado);
-    if (sobrante < 0) {
-      throw new MontoPagoCompraInvalidoError('Asignaste mas de lo que dice el importe del pago entregado');
-    }
-    asignacionesValidas[asignacionesValidas.length - 1].monto = redondearCentavos(
-      asignacionesValidas[asignacionesValidas.length - 1].monto + sobrante
-    );
-  }
-  if (!fotoComprobanteKey && metodoPago === 'transferencia') throw new ComprobantePagoCompraRequeridoError();
 
   const grupoPagoId = randomUUID();
 
   return prisma.$transaction(async (tx) => {
+    let favorDisponible = 0;
+    if (usarSaldoAFavor && metodoPago !== 'saldo_favor') {
+      const proveedor = await tx.proveedor.findUniqueOrThrow({ where: { id: proveedorId } });
+      favorDisponible = Number(proveedor.saldoAFavor);
+    }
+
+    const partes = asignacionesValidas.map((a) => {
+      const deFavor = redondearCentavos(Math.min(favorDisponible, a.monto));
+      favorDisponible = redondearCentavos(favorDisponible - deFavor);
+      return { compraId: a.compraId, deFavor, enDinero: redondearCentavos(a.monto - deFavor) };
+    });
+
+    if (montoEntregado !== undefined && metodoPago !== 'saldo_favor') {
+      const totalEnDinero = partes.reduce((acc, p) => acc + p.enDinero, 0);
+      const sobrante = redondearCentavos(montoEntregado - totalEnDinero);
+      if (sobrante < 0) {
+        throw new MontoPagoCompraInvalidoError('Asignaste mas de lo que dice el importe del pago entregado');
+      }
+      partes[partes.length - 1].enDinero = redondearCentavos(partes[partes.length - 1].enDinero + sobrante);
+    }
+
+    if (!fotoComprobanteKey && metodoPago === 'transferencia' && partes.some((p) => p.enDinero > 0)) {
+      throw new ComprobantePagoCompraRequeridoError();
+    }
+
     const detalle: { compraId: string; numeroFactura: string | null; monto: number; saldoFacturaRestante: number }[] = [];
     let totalPagado = 0;
     let saldoAFavorGenerado = 0;
+    let saldoAFavorUsado = 0;
 
-    for (const asignacion of asignacionesValidas) {
-      const { compra, saldoFacturaRestante, excedenteAFavor } = await aplicarPagoCompra(
-        tx,
-        asignacion.compraId,
-        asignacion.monto,
-        metodoPago,
-        registradoPorId,
-        proveedorId,
-        grupoPagoId,
-        fotoComprobanteKey
-      );
-      totalPagado += asignacion.monto;
-      saldoAFavorGenerado += excedenteAFavor;
+    for (const parte of partes) {
+      let resultado: Awaited<ReturnType<typeof aplicarPagoCompra>> | null = null;
+      if (parte.deFavor > 0) {
+        resultado = await aplicarPagoCompra(
+          tx, parte.compraId, parte.deFavor, 'saldo_favor', registradoPorId, proveedorId, grupoPagoId
+        );
+        saldoAFavorUsado += parte.deFavor;
+      }
+      if (parte.enDinero > 0) {
+        resultado = await aplicarPagoCompra(
+          tx, parte.compraId, parte.enDinero, metodoPago, registradoPorId, proveedorId, grupoPagoId, fotoComprobanteKey
+        );
+        saldoAFavorGenerado += resultado.excedenteAFavor;
+      }
+      const monto = redondearCentavos(parte.deFavor + parte.enDinero);
+      totalPagado += monto;
       detalle.push({
-        compraId: asignacion.compraId,
-        numeroFactura: compra.numeroFactura,
-        monto: asignacion.monto,
-        saldoFacturaRestante,
+        compraId: parte.compraId,
+        numeroFactura: resultado!.compra.numeroFactura,
+        monto,
+        saldoFacturaRestante: resultado!.saldoFacturaRestante,
       });
     }
 
-    return { detalle, totalPagado, saldoAFavorGenerado: redondearCentavos(saldoAFavorGenerado) };
+    return {
+      detalle,
+      totalPagado: redondearCentavos(totalPagado),
+      saldoAFavorGenerado: redondearCentavos(saldoAFavorGenerado),
+      saldoAFavorUsado: redondearCentavos(saldoAFavorUsado),
+    };
   });
 }
 
