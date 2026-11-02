@@ -730,3 +730,23 @@ model ReferidoWhatsapp {
 
   @@index([telefono, recibidoEn])
 }
+
+// La cuenta de WhatsApp del negocio conectada a la app de Meta (una sola
+// fila, id "principal"). Se llena desde Configuracion > Conectar WhatsApp
+// (Embedded Signup en modo coexistencia: el numero sigue funcionando en la
+// app de WhatsApp Business). El token es de la integracion con Meta y se
+// guarda cifrado con META_APP_SECRET (ver whatsappConexion.service).
+model ConexionWhatsapp {
+  id             String    @id @default("principal")
+  wabaId         String
+  phoneNumberId  String
+  // Dataset de Meta ligado a esta cuenta de WhatsApp: ahi van las compras
+  // con ctwa_clid (action_source "business_messaging").
+  datasetId      String?
+  tokenCifrado   String
+  conectadoEn    DateTime  @default(now())
+  // Contactos e historial de la app solo se pueden sincronizar una vez,
+  // dentro de las 24 h siguientes a conectar.
+  sincronizadoEn DateTime?
+  ultimoError    String?
+}

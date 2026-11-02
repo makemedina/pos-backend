@@ -141,6 +141,7 @@ import {
 } from '../services/admin.service';
 import { obtenerConfiguracion, actualizarConfiguracion, SaldoBancoInsuficienteError } from '../services/configuracion.service';
 import { crearBackup, listarBackups, descargarBackup, eliminarBackup, restaurarBackup, BackupNoConfiguradoError } from '../services/backup.service';
+import { obtenerEstadoWhatsapp, conectarWhatsapp, completarConexion, WhatsappNoConfiguradoError } from '../services/whatsappConexion.service';
 
 export const router = Router();
 
@@ -284,6 +285,42 @@ router.post('/admin/backups', requiereAdmin, async (_req, res) => {
     }
     console.error('[backup] Fallo al crear:', err);
     res.status(500).json({ error: (err as Error).message || 'Error al crear el respaldo' });
+  }
+});
+
+// ---------- CONEXION DE WHATSAPP (solo administradores) ----------
+
+router.get('/admin/whatsapp', requiereAdmin, async (_req, res) => {
+  try {
+    res.json(await obtenerEstadoWhatsapp());
+  } catch (err) {
+    console.error('[whatsapp] estado', err);
+    res.status(500).json({ error: 'No se pudo consultar la conexion de WhatsApp.' });
+  }
+});
+
+router.post('/admin/whatsapp/conectar', requiereAdmin, async (req, res) => {
+  const { codigo, wabaId, phoneNumberId } = req.body ?? {};
+  if (typeof codigo !== 'string' || !/^\d+$/.test(String(wabaId)) || !/^\d+$/.test(String(phoneNumberId))) {
+    return res.status(400).json({ error: 'Faltan datos de Meta para conectar el numero.' });
+  }
+  try {
+    res.json(await conectarWhatsapp(codigo, String(wabaId), String(phoneNumberId)));
+  } catch (err) {
+    if (err instanceof WhatsappNoConfiguradoError) return res.status(503).json({ error: err.message });
+    console.error('[whatsapp] conectar', err);
+    res.status(502).json({ error: (err as Error).message || 'Meta rechazo la conexion.' });
+  }
+});
+
+router.post('/admin/whatsapp/completar', requiereAdmin, async (_req, res) => {
+  try {
+    const estado = await completarConexion();
+    if (!estado) return res.status(404).json({ error: 'Todavia no hay un numero conectado.' });
+    res.json(estado);
+  } catch (err) {
+    console.error('[whatsapp] completar', err);
+    res.status(502).json({ error: (err as Error).message });
   }
 });
 

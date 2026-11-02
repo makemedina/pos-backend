@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { prisma } from '../prisma';
+import { conexionParaEventos } from './whatsappConexion.service';
 
 // Conversions API (CAPI) de Meta: le avisa a Meta, desde el servidor, de
 // las ventas y clientes nuevos que se registran en el POS. La venta se
@@ -25,15 +26,13 @@ import { prisma } from '../prisma';
 // Si el cliente abrio el chat desde un anuncio en los ultimos 7 dias y el
 // webhook de WhatsApp guardo el clic (ReferidoWhatsapp), el evento se manda
 // como "business_messaging" con ese ctwa_clid y Meta lo atribuye al anuncio
-// exacto. Requiere META_WABA_ID; META_WA_DATASET_ID es el dataset ligado a
-// la cuenta de WhatsApp (si no se define, se usa META_DATASET_ID).
+// exacto. Va al dataset y con el token de la cuenta de WhatsApp conectada
+// en Configuracion > Conectar WhatsApp (whatsappConexion.service).
 
 const DATASET_ID = process.env.META_DATASET_ID;
 const TOKEN = process.env.META_CAPI_TOKEN;
 const TEST_EVENT_CODE = process.env.META_TEST_EVENT_CODE || undefined;
 const API_VERSION = process.env.META_API_VERSION || 'v24.0';
-const WABA_ID = process.env.META_WABA_ID;
-const WA_DATASET_ID = process.env.META_WA_DATASET_ID || DATASET_ID;
 
 const metaConfigurado = !!(DATASET_ID && TOKEN);
 
@@ -136,13 +135,13 @@ interface EventoMeta {
   custom_data?: Record<string, unknown>;
 }
 
-async function enviarEventos(eventos: EventoMeta[], datasetId = DATASET_ID) {
+async function enviarEventos(eventos: EventoMeta[], datasetId = DATASET_ID, token = TOKEN) {
   // El token va en el body (no en la URL) para que no quede en logs de proxies.
   const url = `https://graph.facebook.com/${API_VERSION}/${datasetId}/events`;
   const respuesta = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: eventos, test_event_code: TEST_EVENT_CODE, access_token: TOKEN }),
+    body: JSON.stringify({ data: eventos, test_event_code: TEST_EVENT_CODE, access_token: token }),
     signal: AbortSignal.timeout(10_000),
   });
   if (!respuesta.ok) {
@@ -159,7 +158,7 @@ function eventTimeValido(fecha: Date): number | null {
 /** El clic de anuncio mas reciente de ese telefono en los 7 dias previos a `fecha`. */
 async function clicDeAnuncio(telefono: string | null, fecha: Date): Promise<string | null> {
   const numero = normalizarTelefono(telefono);
-  if (!WABA_ID || !numero) return null;
+  if (!numero) return null;
   const referido = await prisma.referidoWhatsapp.findFirst({
     where: {
       telefono: numero,
@@ -183,8 +182,9 @@ async function enviarEventoCliente(
   fecha: Date,
   businessEventName = evento.event_name,
 ) {
-  const ctwaClid = await clicDeAnuncio(telefono, fecha);
-  if (!ctwaClid) return enviarEventos([evento]);
+  const conexion = await conexionParaEventos();
+  const ctwaClid = conexion ? await clicDeAnuncio(telefono, fecha) : null;
+  if (!conexion || !ctwaClid) return enviarEventos([evento]);
   await enviarEventos(
     [
       {
@@ -192,10 +192,11 @@ async function enviarEventoCliente(
         event_name: businessEventName,
         action_source: 'business_messaging',
         messaging_channel: 'whatsapp',
-        user_data: { ...evento.user_data, whatsapp_business_account_id: WABA_ID!, ctwa_clid: ctwaClid },
+        user_data: { ...evento.user_data, whatsapp_business_account_id: conexion.wabaId, ctwa_clid: ctwaClid },
       },
     ],
-    WA_DATASET_ID,
+    conexion.datasetId,
+    conexion.token,
   );
 }
 
