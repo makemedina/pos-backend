@@ -185,19 +185,26 @@ async function enviarEventoCliente(
   const conexion = await conexionParaEventos();
   const ctwaClid = conexion ? await clicDeAnuncio(telefono, fecha) : null;
   if (!conexion || !ctwaClid) return enviarEventos([evento]);
-  await enviarEventos(
-    [
-      {
-        ...evento,
-        event_name: businessEventName,
-        action_source: 'business_messaging',
-        messaging_channel: 'whatsapp',
-        user_data: { ...evento.user_data, whatsapp_business_account_id: conexion.wabaId, ctwa_clid: ctwaClid },
-      },
-    ],
-    conexion.datasetId,
-    conexion.token,
-  );
+  try {
+    await enviarEventos(
+      [
+        {
+          ...evento,
+          event_name: businessEventName,
+          action_source: 'business_messaging',
+          messaging_channel: 'whatsapp',
+          user_data: { ...evento.user_data, whatsapp_business_account_id: conexion.wabaId, ctwa_clid: ctwaClid },
+        },
+      ],
+      conexion.datasetId,
+      conexion.token,
+    );
+  } catch (err) {
+    // Ej. la app aun no tiene whatsapp_business_manage_events: mejor
+    // reportar la venta como antes (por telefono) que dejarla sin mandar.
+    console.error('[meta-capi] business_messaging rechazado, se manda como chat', evento.event_id, err);
+    await enviarEventos([evento]);
+  }
 }
 
 /**
