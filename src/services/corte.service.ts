@@ -113,6 +113,17 @@ function subtotalesPorMetodo<T>(items: T[], getMetodo: (item: T) => string | nul
   );
 }
 
+/**
+ * Lo que se les pago de mas a los proveedores (Proveedor.saldoAFavor). Se
+ * resta de cuentasPorPagar -- igual que el saldo a favor de un cliente se
+ * resta de la cartera -- para que pagarle de mas a un proveedor no
+ * descuadre la balanza (el dinero salio del banco pero sigue siendo nuestro).
+ */
+async function saldoAFavorProveedores(): Promise<number> {
+  const agg = await prisma.proveedor.aggregate({ _sum: { saldoAFavor: true } });
+  return Number(agg._sum.saldoAFavor ?? 0);
+}
+
 function sumaPagosPorMetodo(pagos: { metodoPago: string; monto: unknown }[], metodo: string) {
   return pagos
     .filter((p) => p.metodoPago === metodo)
@@ -301,8 +312,14 @@ export async function corteDelDia(
       include: { venta: { include: { cliente: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
+    // Sin los pagos con saldo a favor: no salio dinero ese dia (ya habia
+    // salido cuando se le pago de mas al proveedor).
     prisma.pagoCompra.findMany({
-      where: { fecha: { gte: desde, lte: fin }, compra: { cancelada: false, fecha: { lt: desde } } },
+      where: {
+        fecha: { gte: desde, lte: fin },
+        metodoPago: { not: 'saldo_favor' },
+        compra: { cancelada: false, fecha: { lt: desde } },
+      },
       include: { compra: { include: { proveedor: true } }, registradoPor: true },
       orderBy: { fecha: 'asc' },
     }),
@@ -458,7 +475,8 @@ export async function corteDelDia(
 
   const carteraPendiente =
     Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
-  const cuentasPorPagar = porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0);
+  const cuentasPorPagar =
+    porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0) - (await saldoAFavorProveedores());
   const facturasPendientesPorProveedor = agruparFacturasPendientes(porPagar);
 
   // OJO: aqui todavia no se puede calcular la balanza completa de hoy --
@@ -715,7 +733,8 @@ export async function guardarCorteCaja(
 
   const carteraPendiente =
     Number(cartera._sum.saldoPendiente ?? 0) + Number(saldosInicialesClientes._sum.saldoInicial ?? 0);
-  const cuentasPorPagar = porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0);
+  const cuentasPorPagar =
+    porPagar.reduce((acc, c) => acc + Number(c.saldoPendiente), 0) - (await saldoAFavorProveedores());
   const facturasPendientesPorProveedor = agruparFacturasPendientes(porPagar);
   // La balanza es TODOS los activos menos TODOS los pasivos: lo que hay
   // en efectivo y en el banco (lo que se acaba de contar), mas lo que

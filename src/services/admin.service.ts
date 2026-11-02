@@ -74,6 +74,7 @@ export async function ejecutarReset(confirmacion: string, opciones: OpcionesRese
       await tx.ajusteInventario.deleteMany({});
       await tx.ventaItem.deleteMany({});
       await tx.pagoCompra.deleteMany({});
+      await tx.proveedor.updateMany({ data: { saldoAFavor: 0 } });
       await tx.loteInventario.deleteMany({});
       await tx.venta.deleteMany({});
       await tx.compra.deleteMany({});

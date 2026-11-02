@@ -54,7 +54,10 @@ export async function crearCompra(input: CrearCompraInput) {
     0
   );
   const pagoInicial = input.pagoInicial ?? 0;
-  const saldoPendiente = total - pagoInicial;
+  // Si se pago de mas al capturarla, el excedente va al saldo a favor del
+  // proveedor en vez de dejar la factura con saldo negativo.
+  const excedentePagoInicial = redondearCentavos(Math.max(pagoInicial - total, 0));
+  const saldoPendiente = Math.max(total - pagoInicial, 0);
 
   return prisma.$transaction(async (tx) => {
     const compra = await tx.compra.create({
@@ -105,8 +108,16 @@ export async function crearCompra(input: CrearCompraInput) {
           monto: pagoInicial,
           metodoPago: input.metodoPagoInicial ?? 'efectivo',
           registradoPorId: input.registradoPorId,
+          excedenteAFavor: excedentePagoInicial,
         },
       });
+
+      if (excedentePagoInicial > 0) {
+        await tx.proveedor.update({
+          where: { id: input.proveedorId },
+          data: { saldoAFavor: { increment: excedentePagoInicial } },
+        });
+      }
 
       if ((input.metodoPagoInicial ?? 'efectivo') === 'transferencia') {
         await tx.configuracion.upsert({
@@ -123,17 +134,102 @@ export async function crearCompra(input: CrearCompraInput) {
       }
     }
 
+    // Si se le habia pagado de mas a este proveedor antes, ese saldo a
+    // favor se aplica solo a esta factura nueva (hasta donde alcance).
+    if (saldoPendiente > 0) {
+      await tx.$queryRaw`SELECT id FROM "Proveedor" WHERE id = ${input.proveedorId} FOR UPDATE`;
+      const proveedor = await tx.proveedor.findUniqueOrThrow({ where: { id: input.proveedorId } });
+      const aAplicar = redondearCentavos(Math.min(Number(proveedor.saldoAFavor), saldoPendiente));
+      if (aAplicar > 0) {
+        await tx.pagoCompra.create({
+          data: {
+            compraId: compra.id,
+            monto: aAplicar,
+            metodoPago: 'saldo_favor',
+            registradoPorId: input.registradoPorId,
+          },
+        });
+        await tx.proveedor.update({
+          where: { id: input.proveedorId },
+          data: { saldoAFavor: { decrement: aAplicar } },
+        });
+        const nuevoSaldo = redondearCentavos(saldoPendiente - aAplicar);
+        return tx.compra.update({
+          where: { id: compra.id },
+          data: { saldoPendiente: nuevoSaldo, estadoPago: nuevoSaldo <= 0 ? 'pagada' : 'parcial' },
+        });
+      }
+    }
+
     return compra;
   });
+}
+
+export class SaldoAFavorProveedorInsuficienteError extends Error {
+  constructor(disponible: number) {
+    super(`El proveedor solo tiene $${disponible.toFixed(2)} de saldo a favor disponible.`);
+  }
+}
+
+export class SaldoAFavorProveedorYaUsadoError extends Error {
+  constructor() {
+    super(
+      'El saldo a favor que dejo este pago ya se uso en otra factura. Cancela primero el pago "saldo a favor" de esa factura.'
+    );
+  }
+}
+
+/**
+ * Deshace lo que un PagoCompra movio FUERA de su factura, dentro de una
+ * transaccion ya abierta: le regresa a caja/banco lo que salio, devuelve
+ * al proveedor el saldo a favor que se uso (metodo saldo_favor), y le
+ * quita el saldo a favor que ese pago habia generado por pagar de mas.
+ * El saldoPendiente de la factura lo ajusta cada llamador.
+ */
+async function revertirMovimientosPagoCompra(
+  tx: Prisma.TransactionClient,
+  pago: { monto: Prisma.Decimal; metodoPago: string; excedenteAFavor: Prisma.Decimal },
+  proveedorId: string
+) {
+  const monto = Number(pago.monto);
+  const excedente = Number(pago.excedenteAFavor);
+
+  if (excedente > 0) {
+    await tx.$queryRaw`SELECT id FROM "Proveedor" WHERE id = ${proveedorId} FOR UPDATE`;
+    const proveedor = await tx.proveedor.findUniqueOrThrow({ where: { id: proveedorId } });
+    if (Number(proveedor.saldoAFavor) + 0.005 < excedente) {
+      throw new SaldoAFavorProveedorYaUsadoError();
+    }
+    await tx.proveedor.update({ where: { id: proveedorId }, data: { saldoAFavor: { decrement: excedente } } });
+  }
+
+  // A diferencia de un pago de cliente (donde el dinero entra y cancelar
+  // resta), aqui el pago original SALIO de caja/banco -- cancelarlo debe
+  // DEVOLVER ese dinero, no restarlo de nuevo.
+  if (pago.metodoPago === 'transferencia') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoBancoActual: { increment: monto } },
+      create: { id: 'singleton', saldoBancoActual: monto },
+    });
+  } else if (pago.metodoPago === 'efectivo') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoEfectivoActual: { increment: monto } },
+      create: { id: 'singleton', saldoEfectivoActual: monto },
+    });
+  } else if (pago.metodoPago === 'saldo_favor') {
+    await tx.proveedor.update({ where: { id: proveedorId }, data: { saldoAFavor: { increment: monto } } });
+  }
 }
 
 /**
  * Aplica un abono a UNA compra DENTRO de una transaccion ya abierta por el
  * llamador (para reutilizar esta logica tanto para un pago a una sola
  * factura como para un pago repartido entre varias facturas del mismo
- * proveedor). A diferencia de un pago de cliente, aqui SI se limita el
- * monto al saldo pendiente -- no tiene sentido "sobrepagarle" a un
- * proveedor una factura especifica.
+ * proveedor). Si se paga de mas (efectivo o transferencia), la factura
+ * queda pagada y el excedente pasa al saldo a favor del proveedor -- se
+ * aplica solo a su siguiente factura (ver crearCompra).
  */
 async function aplicarPagoCompra(
   tx: Prisma.TransactionClient,
@@ -163,11 +259,22 @@ async function aplicarPagoCompra(
     );
   }
 
-  const saldoActual = Number(compra.saldoPendiente);
-  if (monto > saldoActual) {
-    throw new MontoPagoCompraInvalidoError(
-      `El pago de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
-    );
+  const saldoActual = Math.max(Number(compra.saldoPendiente), 0);
+  const excedente = redondearCentavos(Math.max(monto - saldoActual, 0));
+
+  if (metodoPago === 'saldo_favor') {
+    if (excedente > 0) {
+      throw new MontoPagoCompraInvalidoError(
+        `El pago con saldo a favor de $${monto.toFixed(2)} es mayor al saldo pendiente de $${saldoActual.toFixed(2)}`
+      );
+    }
+    await tx.$queryRaw`SELECT id FROM "Proveedor" WHERE id = ${compra.proveedorId} FOR UPDATE`;
+    const proveedor = await tx.proveedor.findUniqueOrThrow({ where: { id: compra.proveedorId } });
+    const disponible = Number(proveedor.saldoAFavor);
+    if (monto > disponible + 0.005) {
+      throw new SaldoAFavorProveedorInsuficienteError(disponible);
+    }
+    await tx.proveedor.update({ where: { id: compra.proveedorId }, data: { saldoAFavor: { decrement: monto } } });
   }
 
   if (metodoPago === 'transferencia') {
@@ -175,8 +282,20 @@ async function aplicarPagoCompra(
   }
 
   await tx.pagoCompra.create({
-    data: { compraId, monto, metodoPago, registradoPorId, grupoPagoId, fotoComprobanteKey },
+    data: {
+      compraId,
+      monto,
+      metodoPago,
+      registradoPorId,
+      grupoPagoId,
+      fotoComprobanteKey,
+      excedenteAFavor: excedente,
+    },
   });
+
+  if (excedente > 0) {
+    await tx.proveedor.update({ where: { id: compra.proveedorId }, data: { saldoAFavor: { increment: excedente } } });
+  }
 
   if (metodoPago === 'transferencia') {
     await tx.configuracion.upsert({
@@ -192,7 +311,7 @@ async function aplicarPagoCompra(
     });
   }
 
-  const nuevoSaldo = redondearCentavos(saldoActual - monto);
+  const nuevoSaldo = redondearCentavos(saldoActual - (monto - excedente));
 
   const compraActualizada = await tx.compra.update({
     where: { id: compraId },
@@ -202,7 +321,7 @@ async function aplicarPagoCompra(
     },
   });
 
-  return { compra: compraActualizada, saldoFacturaRestante: nuevoSaldo };
+  return { compra: compraActualizada, saldoFacturaRestante: nuevoSaldo, excedenteAFavor: excedente };
 }
 
 /**
@@ -217,7 +336,7 @@ export async function registrarPagoCompra(
   registradoPorId: string,
   fotoComprobanteKey: string | undefined
 ) {
-  if (!fotoComprobanteKey && metodoPago !== 'efectivo') throw new ComprobantePagoCompraRequeridoError();
+  if (!fotoComprobanteKey && metodoPago === 'transferencia') throw new ComprobantePagoCompraRequeridoError();
   const grupoPagoId = randomUUID();
   return prisma.$transaction(async (tx) => {
     const { compra } = await aplicarPagoCompra(tx, compraId, monto, metodoPago, registradoPorId, undefined, grupoPagoId, fotoComprobanteKey);
@@ -235,28 +354,44 @@ export interface AsignacionPagoMultipleCompra {
  * entre varias de sus facturas pendientes, con el monto especifico que se
  * le asigna a cada una. Mismo patron que registrarPagoMultiNota() del
  * lado de clientes: todo en una sola transaccion, todo o nada.
+ *
+ * montoEntregado (opcional) es lo que de verdad se le entrego: si es mas
+ * que la suma de las asignaciones, el sobrante se carga a la ultima
+ * factura y aplicarPagoCompra lo manda al saldo a favor del proveedor.
  */
 export async function registrarPagoMultiCompra(
   proveedorId: string,
   asignaciones: AsignacionPagoMultipleCompra[],
   metodoPago: string,
   registradoPorId: string,
-  fotoComprobanteKey: string | undefined
+  fotoComprobanteKey: string | undefined,
+  montoEntregado?: number
 ) {
-  const asignacionesValidas = asignaciones.filter((a) => a.monto > 0);
+  const asignacionesValidas = asignaciones.filter((a) => a.monto > 0).map((a) => ({ ...a }));
   if (asignacionesValidas.length === 0) {
     throw new MontoPagoCompraInvalidoError('Debes asignar un monto mayor a cero a al menos una factura');
   }
-  if (!fotoComprobanteKey && metodoPago !== 'efectivo') throw new ComprobantePagoCompraRequeridoError();
+  if (montoEntregado !== undefined && metodoPago !== 'saldo_favor') {
+    const totalAsignado = asignacionesValidas.reduce((acc, a) => acc + a.monto, 0);
+    const sobrante = redondearCentavos(montoEntregado - totalAsignado);
+    if (sobrante < 0) {
+      throw new MontoPagoCompraInvalidoError('Asignaste mas de lo que dice el importe del pago entregado');
+    }
+    asignacionesValidas[asignacionesValidas.length - 1].monto = redondearCentavos(
+      asignacionesValidas[asignacionesValidas.length - 1].monto + sobrante
+    );
+  }
+  if (!fotoComprobanteKey && metodoPago === 'transferencia') throw new ComprobantePagoCompraRequeridoError();
 
   const grupoPagoId = randomUUID();
 
   return prisma.$transaction(async (tx) => {
     const detalle: { compraId: string; numeroFactura: string | null; monto: number; saldoFacturaRestante: number }[] = [];
     let totalPagado = 0;
+    let saldoAFavorGenerado = 0;
 
     for (const asignacion of asignacionesValidas) {
-      const { compra, saldoFacturaRestante } = await aplicarPagoCompra(
+      const { compra, saldoFacturaRestante, excedenteAFavor } = await aplicarPagoCompra(
         tx,
         asignacion.compraId,
         asignacion.monto,
@@ -267,6 +402,7 @@ export async function registrarPagoMultiCompra(
         fotoComprobanteKey
       );
       totalPagado += asignacion.monto;
+      saldoAFavorGenerado += excedenteAFavor;
       detalle.push({
         compraId: asignacion.compraId,
         numeroFactura: compra.numeroFactura,
@@ -275,7 +411,7 @@ export async function registrarPagoMultiCompra(
       });
     }
 
-    return { detalle, totalPagado };
+    return { detalle, totalPagado, saldoAFavorGenerado: redondearCentavos(saldoAFavorGenerado) };
   });
 }
 
@@ -291,6 +427,7 @@ export async function pagosCompra(compraId: string) {
     id: p.id,
     monto: Number(p.monto),
     metodoPago: p.metodoPago,
+    excedenteAFavor: Number(p.excedenteAFavor),
     fecha: p.fecha,
     cancelado: p.cancelado,
     canceladoEn: p.canceladoEn,
@@ -365,7 +502,9 @@ export async function cancelarPagoCompra(
     await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
     const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
 
-    const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + monto, total));
+    // Lo que se fue a saldo a favor no habia bajado la factura.
+    const aplicadoAFactura = monto - Number(pagoActual.excedenteAFavor);
+    const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + aplicadoAFactura, total));
 
     await tx.compra.update({
       where: { id: pagoActual.compraId },
@@ -375,23 +514,7 @@ export async function cancelarPagoCompra(
       },
     });
 
-    // A diferencia de un pago de cliente (donde el dinero entra y cancelar
-    // resta), aqui el pago original SALIO de caja/banco (decrement en
-    // aplicarPagoCompra) -- cancelarlo debe DEVOLVER ese dinero, no
-    // restarlo de nuevo.
-    if (pagoActual.metodoPago === 'transferencia') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoBancoActual: { increment: monto } },
-        create: { id: 'singleton', saldoBancoActual: monto },
-      });
-    } else if (pagoActual.metodoPago === 'efectivo') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoEfectivoActual: { increment: monto } },
-        create: { id: 'singleton', saldoEfectivoActual: monto },
-      });
-    }
+    await revertirMovimientosPagoCompra(tx, pagoActual, compraActual.proveedorId);
 
     return tx.pagoCompra.update({
       where: { id: pagoId },
@@ -528,7 +651,8 @@ export async function cancelarGrupoPagoCompra(
       await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
       const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
 
-      const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + monto, total));
+      const aplicadoAFactura = monto - Number(pagoActual.excedenteAFavor);
+      const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + aplicadoAFactura, total));
 
       await tx.compra.update({
         where: { id: pagoActual.compraId },
@@ -538,19 +662,7 @@ export async function cancelarGrupoPagoCompra(
         },
       });
 
-      if (pagoActual.metodoPago === 'transferencia') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoBancoActual: { increment: monto } },
-          create: { id: 'singleton', saldoBancoActual: monto },
-        });
-      } else if (pagoActual.metodoPago === 'efectivo') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoEfectivoActual: { increment: monto } },
-          create: { id: 'singleton', saldoEfectivoActual: monto },
-        });
-      }
+      await revertirMovimientosPagoCompra(tx, pagoActual, compraActual.proveedorId);
 
       await tx.pagoCompra.update({
         where: { id: pagoActual.id },
@@ -616,6 +728,20 @@ export async function facturasPendientes() {
       nombre: c.proveedor.nombre,
       telefono: c.proveedor.telefono,
     },
+  }));
+}
+
+/** Proveedores a los que se les pago de mas y tienen saldo a favor. */
+export async function proveedoresConSaldoAFavor() {
+  const proveedores = await prisma.proveedor.findMany({
+    where: { saldoAFavor: { gt: 0 } },
+    orderBy: { nombre: 'asc' },
+  });
+  return proveedores.map((p) => ({
+    id: p.id,
+    nombre: p.nombre,
+    telefono: p.telefono,
+    saldoAFavor: Number(p.saldoAFavor),
   }));
 }
 
@@ -863,28 +989,12 @@ export async function cancelarCompra(
       });
     }
 
-    // Si algo de lo pagado fue por transferencia, se le regresa al saldo
-    // bancario -- esa compra ya no existe, ese dinero no debe seguir
-    // contando como salido por ella.
-    const pagadoPorTransferencia = compra.pagos
-      .filter((p) => p.metodoPago === 'transferencia')
-      .reduce((acc, p) => acc + Number(p.monto), 0);
-    const pagadoEnEfectivo = compra.pagos
-      .filter((p) => p.metodoPago === 'efectivo')
-      .reduce((acc, p) => acc + Number(p.monto), 0);
-    if (pagadoPorTransferencia > 0) {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoBancoActual: { increment: pagadoPorTransferencia } },
-        create: { id: 'singleton', saldoBancoActual: pagadoPorTransferencia },
-      });
-    }
-    if (pagadoEnEfectivo > 0) {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoEfectivoActual: { increment: pagadoEnEfectivo } },
-        create: { id: 'singleton', saldoEfectivoActual: pagadoEnEfectivo },
-      });
+    // Lo pagado se le regresa a caja/banco (o al saldo a favor del
+    // proveedor) -- esa compra ya no existe, ese dinero no debe seguir
+    // contando como salido por ella. Los pagos ya cancelados no: esos ya
+    // se habian devuelto al cancelarlos.
+    for (const pago of compra.pagos.filter((p) => !p.cancelado)) {
+      await revertirMovimientosPagoCompra(tx, pago, compra.proveedorId);
     }
 
     return tx.compra.update({
@@ -1015,21 +1125,8 @@ export async function corregirCompraAContadoCredito(compraId: string) {
   }
 
   return prisma.$transaction(async (tx) => {
-    for (const pago of compra.pagos) {
-      const monto = Number(pago.monto);
-      if (pago.metodoPago === 'transferencia') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoBancoActual: { increment: monto } },
-          create: { id: 'singleton', saldoBancoActual: monto },
-        });
-      } else if (pago.metodoPago === 'efectivo') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoEfectivoActual: { increment: monto } },
-          create: { id: 'singleton', saldoEfectivoActual: monto },
-        });
-      }
+    for (const pago of compra.pagos.filter((p) => !p.cancelado)) {
+      await revertirMovimientosPagoCompra(tx, pago, compra.proveedorId);
     }
 
     await tx.pagoCompra.deleteMany({ where: { compraId } });

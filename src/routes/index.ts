@@ -12,7 +12,7 @@ import {
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
 } from '../services/ventas.service';
-import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, pagosProveedorAgrupados, cancelarGrupoPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError, ComprobantePagoCompraRequeridoError, obtenerPagoCompraPorId } from '../services/compras.service';
+import { crearCompra, registrarPagoCompra, registrarPagoMultiCompra, facturasPendientes, pagosCompra, cancelarPagoCompra, pagosProveedorAgrupados, cancelarGrupoPagoCompra, obtenerDetalleCompra, listarHistorialCompras, cancelarCompra, cargarFacturasIniciales, corregirCompraAContadoCredito, proveedoresConSaldoAFavor, SaldoAFavorProveedorInsuficienteError, SaldoAFavorProveedorYaUsadoError, subirFotoFacturaCompra, descargarFotoFacturaCompra, CompraYaCanceladaError, CompraConMercanciaVendidaError, AutorizacionCancelacionInvalidaError as AutorizacionCancelacionCompraInvalidaError, MontoPagoCompraInvalidoError, CompraNoEsDeHoyError, CorteYaHechoError, PagoCompraYaCanceladoError, AutorizacionCancelacionPagoCompraInvalidaError, ComprobantePagoCompraRequeridoError, obtenerPagoCompraPorId } from '../services/compras.service';
 import { crearAjusteInventario, movimientosInventario, detalleMovimientosInventario, lotesDeVariante, reporteAntiguedadStock, obtenerAjustePorId, AutorizacionInvalidaError, StockInsuficienteParaAjusteError } from '../services/inventario.service';
 import { clasificacionClientes, clientesEnRiesgo, TIPOS_CLIENTE } from '../services/analitica.service';
 import { saldoAFavorDisponible, SaldoAFavorInsuficienteError } from '../services/saldoAFavor.service';
@@ -1194,7 +1194,7 @@ router.post('/compras/:id/pagos', requierePermiso('puedeRegistrarCompras'), subi
     res.status(201).json(compra);
   } catch (err) {
     if (errorComprobantePagoCompra(err, res)) return;
-    if (err instanceof MontoPagoCompraInvalidoError) {
+    if (err instanceof MontoPagoCompraInvalidoError || err instanceof SaldoAFavorProveedorInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
     }
     if (err instanceof SaldoBancoInsuficienteError) {
@@ -1219,17 +1219,20 @@ router.post('/proveedores/:id/pagos', requierePermiso('puedeRegistrarCompras'), 
     const fotoComprobanteKey = req.file
       ? await subirFotoComprobantePago(req.file.buffer, req.file.mimetype)
       : undefined;
+    const montoEntregado =
+      req.body.montoEntregado !== undefined && req.body.montoEntregado !== '' ? Number(req.body.montoEntregado) : undefined;
     const resultado = await registrarPagoMultiCompra(
       req.params.id,
       asignacionesNormalizadas,
       metodoPago,
       req.usuario!.id,
-      fotoComprobanteKey
+      fotoComprobanteKey,
+      montoEntregado
     );
     res.status(201).json(resultado);
   } catch (err) {
     if (errorComprobantePagoCompra(err, res)) return;
-    if (err instanceof MontoPagoCompraInvalidoError) {
+    if (err instanceof MontoPagoCompraInvalidoError || err instanceof SaldoAFavorProveedorInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'MONTO_INVALIDO' });
     }
     if (err instanceof SaldoBancoInsuficienteError) {
@@ -1247,6 +1250,15 @@ router.get('/compras/pendientes', requierePermiso('puedeVerCarteraGeneral'), asy
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al consultar facturas pendientes' });
+  }
+});
+
+router.get('/proveedores/saldos-a-favor', requierePermiso('puedeVerCarteraGeneral'), async (_req, res) => {
+  try {
+    res.json(await proveedoresConSaldoAFavor());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar los saldos a favor de proveedores' });
   }
 });
 
@@ -1296,6 +1308,9 @@ router.post('/compras/:id/cancelar', async (req, res) => {
     if (err instanceof AutorizacionCancelacionCompraInvalidaError) {
       return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
     }
+    if (err instanceof SaldoAFavorProveedorYaUsadoError) {
+      return res.status(409).json({ error: err.message, code: 'SALDO_FAVOR_YA_USADO' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al cancelar la compra' });
   }
@@ -1314,6 +1329,9 @@ router.post('/compras/:id/corregir-a-credito', requierePermiso('puedeRegistrarCo
     }
     if (err instanceof CorteYaHechoError) {
       return res.status(409).json({ error: err.message, code: 'CORTE_YA_HECHO' });
+    }
+    if (err instanceof SaldoAFavorProveedorYaUsadoError) {
+      return res.status(409).json({ error: err.message, code: 'SALDO_FAVOR_YA_USADO' });
     }
     console.error(err);
     res.status(500).json({ error: 'Error al corregir la compra' });
@@ -1372,6 +1390,9 @@ router.post('/compras/grupos-pago/:grupoKey/cancelar', requierePermiso('puedeReg
     if (err instanceof AutorizacionCancelacionPagoCompraInvalidaError) {
       return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
     }
+    if (err instanceof SaldoAFavorProveedorYaUsadoError) {
+      return res.status(409).json({ error: err.message, code: 'SALDO_FAVOR_YA_USADO' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al cancelar el pago' });
   }
@@ -1392,6 +1413,9 @@ router.post('/compras/:compraId/pagos/:pagoId/cancelar', requierePermiso('puedeR
     }
     if (err instanceof AutorizacionCancelacionPagoCompraInvalidaError) {
       return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    if (err instanceof SaldoAFavorProveedorYaUsadoError) {
+      return res.status(409).json({ error: err.message, code: 'SALDO_FAVOR_YA_USADO' });
     }
     console.error(err);
     res.status(500).json({ error: 'Error al cancelar el pago' });
