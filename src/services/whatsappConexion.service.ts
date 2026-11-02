@@ -113,7 +113,13 @@ async function cuentaDelToken(token: string, wabaId?: string, phoneNumberId?: st
     const datos: any = await respuesta.json().catch(() => ({}));
     const alcances: any[] = datos?.data?.granular_scopes ?? [];
     wabaId = alcances.find((a) => a.scope === 'whatsapp_business_management')?.target_ids?.[0];
-    if (!wabaId) throw new Error('Meta no dijo que cuenta de WhatsApp se autorizo. Intenta conectar de nuevo.');
+    if (!wabaId) {
+      // Solo nombres de permisos e ids de cuentas (nada secreto), para diagnosticar.
+      console.error('[whatsapp] token sin cuenta de WhatsApp; permisos:', JSON.stringify(alcances), datos?.data?.is_valid);
+      throw new Error(
+        'Meta no autorizó ninguna cuenta de WhatsApp. Asegúrate de terminar todo en la ventana de Meta (hasta escanear el código con el celular) antes de que se cierre.',
+      );
+    }
   }
   if (!phoneNumberId) {
     const numeros = await graph('GET', `${wabaId}/phone_numbers?fields=id,display_phone_number`, token);
