@@ -1,9 +1,19 @@
 import { prisma } from '../prisma';
 
+// Un pendiente es de "un dia", no de una hora: se guarda como medianoche
+// UTC de ese dia calendario para que no dependa de la zona horaria del
+// servidor (Railway corre en UTC) ni del navegador (Culiacan es UTC-7).
+// Antes se guardaba como medianoche local del servidor y el frontend lo
+// mostraba un dia antes ("lo programo para manana y sale hoy").
 function normalizarFecha(fecha: Date) {
-  const f = new Date(fecha);
-  f.setHours(0, 0, 0, 0);
-  return f;
+  return new Date(Date.UTC(fecha.getFullYear(), fecha.getMonth(), fecha.getDate()));
+}
+
+const UN_DIA_MS = 24 * 60 * 60 * 1000;
+
+function hoyEnCuliacan() {
+  // en-CA da el formato YYYY-MM-DD
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Mazatlan' }).format(new Date());
 }
 
 const INCLUIR_CLIENTE = { registradoPor: true, cliente: true } as const;
@@ -22,10 +32,15 @@ export async function listarPendientes(incluirHechos = false) {
 }
 
 /** Los pendientes programados para hoy -- se muestran junto a "Llamadas de hoy". */
-export async function listarPendientesDeHoy() {
-  const hoy = normalizarFecha(new Date());
+export async function listarPendientesDeHoy(hoyStr?: string) {
+  const [anio, mes, dia] = (hoyStr && /^\d{4}-\d{2}-\d{2}$/.test(hoyStr) ? hoyStr : hoyEnCuliacan())
+    .split('-')
+    .map(Number);
+  const inicio = new Date(Date.UTC(anio, mes - 1, dia));
+  // Rango de todo el dia (y no igualdad exacta) para que tambien entren
+  // los pendientes guardados con el formato anterior.
   return prisma.pendiente.findMany({
-    where: { fecha: hoy },
+    where: { fecha: { gte: inicio, lt: new Date(inicio.getTime() + UN_DIA_MS) } },
     include: INCLUIR_CLIENTE,
     orderBy: { creadoEn: 'asc' },
   });

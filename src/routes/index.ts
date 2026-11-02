@@ -1991,9 +1991,9 @@ router.get('/pendientes', async (req, res) => {
   }
 });
 
-router.get('/pendientes/hoy', async (_req, res) => {
+router.get('/pendientes/hoy', async (req, res) => {
   try {
-    const pendientes = await listarPendientesDeHoy();
+    const pendientes = await listarPendientesDeHoy(typeof req.query.fecha === 'string' ? req.query.fecha : undefined);
     res.json(pendientes);
   } catch (err) {
     console.error(err);
