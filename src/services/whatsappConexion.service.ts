@@ -99,11 +99,36 @@ async function datasetDeLaCuenta(wabaId: string, token: string): Promise<string 
   return creado?.id ? String(creado.id) : null;
 }
 
+/**
+ * La ventana de Meta no siempre avisa los ids de la cuenta (en coexistencia
+ * a veces solo llega el codigo). Si faltan, se sacan del token: la cuenta
+ * que el usuario autorizo y su numero.
+ */
+async function cuentaDelToken(token: string, wabaId?: string, phoneNumberId?: string) {
+  if (!wabaId) {
+    const params = new URLSearchParams({ input_token: token, access_token: `${APP_ID}|${APP_SECRET}` });
+    const respuesta = await fetch(`https://graph.facebook.com/${API_VERSION}/debug_token?${params}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    const datos: any = await respuesta.json().catch(() => ({}));
+    const alcances: any[] = datos?.data?.granular_scopes ?? [];
+    wabaId = alcances.find((a) => a.scope === 'whatsapp_business_management')?.target_ids?.[0];
+    if (!wabaId) throw new Error('Meta no dijo que cuenta de WhatsApp se autorizo. Intenta conectar de nuevo.');
+  }
+  if (!phoneNumberId) {
+    const numeros = await graph('GET', `${wabaId}/phone_numbers?fields=id,display_phone_number`, token);
+    phoneNumberId = numeros?.data?.[0]?.id;
+    if (!phoneNumberId) throw new Error('La cuenta de WhatsApp autorizada no tiene numero.');
+  }
+  return { wabaId: String(wabaId), phoneNumberId: String(phoneNumberId) };
+}
+
 // ---------- operaciones ----------
 
-export async function conectarWhatsapp(codigo: string, wabaId: string, phoneNumberId: string) {
+export async function conectarWhatsapp(codigo: string, wabaIdVentana?: string, phoneNumberIdVentana?: string) {
   if (!datosParaConectar()) throw new WhatsappNoConfiguradoError();
   const token = await canjearCodigo(codigo);
+  const { wabaId, phoneNumberId } = await cuentaDelToken(token, wabaIdVentana, phoneNumberIdVentana);
   await graph('POST', `${wabaId}/subscribed_apps`, token);
 
   await prisma.conexionWhatsapp.upsert({

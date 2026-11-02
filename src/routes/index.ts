@@ -301,11 +301,12 @@ router.get('/admin/whatsapp', requiereAdmin, async (_req, res) => {
 
 router.post('/admin/whatsapp/conectar', requiereAdmin, async (req, res) => {
   const { codigo, wabaId, phoneNumberId } = req.body ?? {};
-  if (typeof codigo !== 'string' || !/^\d+$/.test(String(wabaId)) || !/^\d+$/.test(String(phoneNumberId))) {
-    return res.status(400).json({ error: 'Faltan datos de Meta para conectar el numero.' });
+  const id = (valor: unknown) => (/^\d+$/.test(String(valor ?? '')) ? String(valor) : undefined);
+  if (typeof codigo !== 'string' || !codigo) {
+    return res.status(400).json({ error: 'Falta el codigo de autorizacion de Meta.' });
   }
   try {
-    res.json(await conectarWhatsapp(codigo, String(wabaId), String(phoneNumberId)));
+    res.json(await conectarWhatsapp(codigo, id(wabaId), id(phoneNumberId)));
   } catch (err) {
     if (err instanceof WhatsappNoConfiguradoError) return res.status(503).json({ error: err.message });
     console.error('[whatsapp] conectar', err);
