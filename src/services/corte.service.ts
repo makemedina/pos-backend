@@ -284,12 +284,13 @@ export async function corteDelDia(
     movimientosInventario(desde, fin),
     prisma.venta.findMany({
       where: { fecha: { gte: desde, lte: fin }, cancelada: false },
-      include: { cliente: true, vendedor: true, pagos: { orderBy: { fecha: 'asc' } } },
+      // Sin los pagos cancelados: cancelarlos ya devolvio ese dinero.
+      include: { cliente: true, vendedor: true, pagos: { where: { cancelado: false }, orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
     prisma.compra.findMany({
       where: { fecha: { gte: desde, lte: fin }, cancelada: false, esCargaInicial: false },
-      include: { proveedor: true, pagos: { orderBy: { fecha: 'asc' } } },
+      include: { proveedor: true, pagos: { where: { cancelado: false }, orderBy: { fecha: 'asc' } } },
       orderBy: { fecha: 'asc' },
     }),
     prisma.gasto.findMany({
@@ -404,6 +405,11 @@ export async function corteDelDia(
   const comprasConMetodo = comprasHoy.map((c) => ({
     compra: c,
     metodoPago: c.pagos[0]?.metodoPago ?? null,
+    efectivo: sumaPagosPorMetodo(c.pagos, 'efectivo'),
+    transferencia: sumaPagosPorMetodo(c.pagos, 'transferencia'),
+    // Lo que de verdad bajo la factura: sin el excedente que se fue a
+    // saldo a favor, y contando lo que se pago con saldo a favor.
+    aplicado: c.pagos.reduce((acc, p) => acc + Number(p.monto) - Number(p.excedenteAFavor), 0),
   }));
 
   const ventasOrdenadas = ordenarPorMetodoYNombre(
@@ -452,10 +458,17 @@ export async function corteDelDia(
     },
     { efectivo: 0, transferencia: 0, credito: 0 }
   );
-  const comprasSubtotalesPorMetodo = subtotalesPorMetodo(
-    comprasConMetodo,
-    (x) => x.metodoPago,
-    (x) => Number(x.compra.total)
+  // Igual que ventas: del dinero que de verdad salio por cada metodo (un
+  // anticipo parcial, un abono del mismo dia o un pago de mas), no del
+  // total de la factura bajo el metodo del primer pago.
+  const comprasSubtotalesPorMetodo = comprasConMetodo.reduce(
+    (acc, x) => {
+      acc.efectivo += x.efectivo;
+      acc.transferencia += x.transferencia;
+      acc.credito += Math.max(Number(x.compra.total) - x.aplicado, 0);
+      return acc;
+    },
+    { efectivo: 0, transferencia: 0, credito: 0 }
   );
 
   const totalPagosClientes = pagosClientesHoy.reduce((acc, p) => acc + Number(p.monto), 0);
