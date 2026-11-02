@@ -317,6 +317,7 @@ export async function corteDelDia(
     prisma.pagoCompra.findMany({
       where: {
         fecha: { gte: desde, lte: fin },
+        cancelado: false,
         metodoPago: { not: 'saldo_favor' },
         compra: { cancelada: false, fecha: { lt: desde } },
       },
