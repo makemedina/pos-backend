@@ -6,6 +6,7 @@ interface FiltrosHistorial {
   desde?: string;
   hasta?: string;
   clienteId?: string;
+  productoId?: string;
   metodoPago?: string; // efectivo | transferencia
   incluirCanceladas?: boolean;
 }
@@ -145,6 +146,7 @@ export async function listarHistorialVentas(filtros: FiltrosHistorial, usuario: 
       ...(filtros.incluirCanceladas ? {} : { cancelada: false }),
       ...(puedeVerTodas ? {} : { vendedorId: usuario.id }),
       ...(filtros.clienteId ? { clienteId: filtros.clienteId } : {}),
+      ...(filtros.productoId ? { items: { some: { lote: { variante: { productoId: filtros.productoId } } } } } : {}),
       ...(filtros.metodoPago ? { pagos: { some: { metodoPago: filtros.metodoPago } } } : {}),
     },
     include: {
@@ -180,6 +182,7 @@ export async function listarHistorialVentas(filtros: FiltrosHistorial, usuario: 
       const precioUnitario = Number(i.precioUnitario);
       const costoUnitario = Number(i.costoUnitarioSnapshot);
       return {
+        productoId: i.lote.variante.productoId,
         producto: i.lote.variante.producto.nombre,
         marca: i.lote.variante.marca,
         cantidad,

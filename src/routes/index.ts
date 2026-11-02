@@ -2144,6 +2144,7 @@ router.get('/historial/ventas', async (req, res) => {
         desde: req.query.desde as string | undefined,
         hasta: req.query.hasta as string | undefined,
         clienteId: req.query.clienteId as string | undefined,
+        productoId: req.query.productoId as string | undefined,
         metodoPago: req.query.metodoPago as string | undefined,
         incluirCanceladas: req.query.incluirCanceladas === 'true',
       },
