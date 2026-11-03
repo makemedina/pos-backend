@@ -522,38 +522,60 @@ export async function cancelarPagoCompra(
   }
 
   return prisma.$transaction(async (tx) => {
-    const monto = Number(pagoActual.monto);
-    const total = Number(pagoActual.compra.total);
-
-    // Mismo candado que aplicarPagoCompra: bloquea la fila y vuelve a leer
-    // el saldoPendiente YA DENTRO de la transaccion.
-    await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
-    const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
-
-    // Lo que se fue a saldo a favor no habia bajado la factura.
-    const aplicadoAFactura = monto - Number(pagoActual.excedenteAFavor);
-    const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + aplicadoAFactura, total));
-
-    await tx.compra.update({
-      where: { id: pagoActual.compraId },
-      data: {
-        saldoPendiente: nuevoSaldo,
-        estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
-      },
-    });
-
-    await revertirMovimientosPagoCompra(tx, pagoActual, compraActual.proveedorId);
-
-    return tx.pagoCompra.update({
-      where: { id: pagoId },
-      data: {
-        cancelado: true,
-        canceladoEn: new Date(),
-        canceladoPorId: solicitadoPorId,
-        autorizadoPorId,
-      },
-    });
+    if (!(await revertirPagoCompra(tx, pagoActual, solicitadoPorId, autorizadoPorId))) {
+      throw new PagoCompraYaCanceladoError();
+    }
+    return tx.pagoCompra.findUniqueOrThrow({ where: { id: pagoId } });
   });
+}
+
+/**
+ * Revierte un PagoCompra dentro de una transaccion: sube de nuevo el
+ * saldo de la factura, regresa el dinero a caja/banco (o al saldo a favor
+ * del proveedor) y lo marca cancelado.
+ *
+ * Primero lo marca cancelado, solo si todavia no lo estaba: si llegan dos
+ * cancelaciones a la vez (doble clic), la segunda espera el candado de la
+ * fila, no encuentra nada que marcar y regresa false sin mover dinero.
+ *
+ * Si la compra ya se habia cancelado, su dinero ya se devolvio al
+ * cancelarla (ver cancelarCompra) -- el pago solo se marca.
+ */
+async function revertirPagoCompra(
+  tx: Prisma.TransactionClient,
+  pagoActual: { id: string; compraId: string; monto: Prisma.Decimal; metodoPago: string; excedenteAFavor: Prisma.Decimal },
+  solicitadoPorId: string,
+  autorizadoPorId: string | null
+): Promise<boolean> {
+  const marcado = await tx.pagoCompra.updateMany({
+    where: { id: pagoActual.id, cancelado: false },
+    data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
+  });
+  if (marcado.count === 0) return false;
+
+  // Mismo candado que aplicarPagoCompra: bloquea la fila y vuelve a leer
+  // el saldoPendiente YA DENTRO de la transaccion.
+  await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
+  const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
+  if (compraActual.cancelada) return true;
+
+  const monto = Number(pagoActual.monto);
+  const total = Number(compraActual.total);
+
+  // Lo que se fue a saldo a favor no habia bajado la factura.
+  const aplicadoAFactura = monto - Number(pagoActual.excedenteAFavor);
+  const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + aplicadoAFactura, total));
+
+  await tx.compra.update({
+    where: { id: pagoActual.compraId },
+    data: {
+      saldoPendiente: nuevoSaldo,
+      estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
+    },
+  });
+
+  await revertirMovimientosPagoCompra(tx, pagoActual, compraActual.proveedorId);
+  return true;
 }
 
 /**
@@ -672,33 +694,14 @@ export async function cancelarGrupoPagoCompra(
   }
 
   return prisma.$transaction(async (tx) => {
+    let cancelados = 0;
     for (const pagoActual of pagosActivos) {
-      const monto = Number(pagoActual.monto);
-      const total = Number(pagoActual.compra.total);
-
-      await tx.$queryRaw`SELECT id FROM "Compra" WHERE id = ${pagoActual.compraId} FOR UPDATE`;
-      const compraActual = await tx.compra.findUniqueOrThrow({ where: { id: pagoActual.compraId } });
-
-      const aplicadoAFactura = monto - Number(pagoActual.excedenteAFavor);
-      const nuevoSaldo = redondearCentavos(Math.min(Number(compraActual.saldoPendiente) + aplicadoAFactura, total));
-
-      await tx.compra.update({
-        where: { id: pagoActual.compraId },
-        data: {
-          saldoPendiente: nuevoSaldo,
-          estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
-        },
-      });
-
-      await revertirMovimientosPagoCompra(tx, pagoActual, compraActual.proveedorId);
-
-      await tx.pagoCompra.update({
-        where: { id: pagoActual.id },
-        data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
-      });
+      if (await revertirPagoCompra(tx, pagoActual, solicitadoPorId, autorizadoPorId)) cancelados++;
     }
+    // Otra peticion los cancelo todos mientras tanto (doble clic).
+    if (cancelados === 0) throw new PagoCompraYaCanceladoError();
 
-    return { cancelados: pagosActivos.length };
+    return { cancelados };
   });
 }
 
@@ -995,14 +998,27 @@ export async function cancelarCompra(
   }
 
   return prisma.$transaction(async (tx) => {
+    // Se marca como cancelada PRIMERO, solo si todavia no lo estaba: si
+    // llegan dos cancelaciones a la vez (doble clic), la segunda espera el
+    // candado de la fila y se rechaza -- en vez de devolver el dinero dos
+    // veces. Si abajo resulta que ya se vendio mercancia, el error
+    // deshace esta marca junto con todo lo demas.
+    const marcada = await tx.compra.updateMany({
+      where: { id: compraId, cancelada: false },
+      data: { cancelada: true, canceladaEn: new Date(), canceladaPorId: solicitadoPorId, autorizadaPorId, saldoPendiente: 0 },
+    });
+    if (marcada.count === 0) {
+      throw new CompraYaCanceladaError();
+    }
+
+    // Bloquea los lotes (igual que crearVenta) para que no se venda nada de
+    // esta compra entre la revision de abajo y ponerlos en cero.
+    await tx.$queryRaw`SELECT id FROM "LoteInventario" WHERE "compraId" = ${compraId} FOR UPDATE`;
+
     const compra = await tx.compra.findUniqueOrThrow({
       where: { id: compraId },
       include: { lotes: true, pagos: true },
     });
-
-    if (compra.cancelada) {
-      throw new CompraYaCanceladaError();
-    }
 
     for (const lote of compra.lotes) {
       if (Number(lote.cantidadDisponible) < Number(lote.cantidadInicial)) {
@@ -1025,16 +1041,8 @@ export async function cancelarCompra(
       await revertirMovimientosPagoCompra(tx, pago, compra.proveedorId);
     }
 
-    return tx.compra.update({
-      where: { id: compraId },
-      data: {
-        cancelada: true,
-        canceladaEn: new Date(),
-        canceladaPorId: solicitadoPorId,
-        autorizadaPorId,
-        saldoPendiente: 0,
-      },
-    });
+    const { lotes: _lotes, pagos: _pagos, ...compraCancelada } = compra;
+    return compraCancelada;
   });
 }
 

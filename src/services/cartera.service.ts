@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
-import { consumirSaldoAFavor } from './saldoAFavor.service';
+import { consumirSaldoAFavor, restaurarSaldoAFavor } from './saldoAFavor.service';
 import { redondearCentavos } from '../utils/dinero';
 import { subirImagenR2, descargarImagenR2 } from './imagenesR2.service';
 
@@ -279,51 +279,82 @@ export async function cancelarGrupoPago(
   }
 
   return prisma.$transaction(async (tx) => {
-    let clienteId = '';
-
+    let cancelados = 0;
     for (const pagoActual of pagosActivos) {
-      const monto = Number(pagoActual.monto);
-      const total = Number(pagoActual.venta.total);
-
-      await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${pagoActual.ventaId} FOR UPDATE`;
-      const ventaActual = await tx.venta.findUniqueOrThrow({ where: { id: pagoActual.ventaId } });
-      clienteId = ventaActual.clienteId;
-
-      await tx.pagoAsignacion.deleteMany({ where: { pagoId: pagoActual.id } });
-
-      const nuevoSaldo = redondearCentavos(Math.min(Number(ventaActual.saldoPendiente) + monto, total));
-
-      await tx.venta.update({
-        where: { id: pagoActual.ventaId },
-        data: {
-          saldoPendiente: nuevoSaldo,
-          estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
-        },
-      });
-
-      if (pagoActual.metodoPago === 'transferencia') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoBancoActual: { decrement: monto } },
-          create: { id: 'singleton', saldoBancoActual: -monto },
-        });
-      } else if (pagoActual.metodoPago === 'efectivo') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoEfectivoActual: { decrement: monto } },
-          create: { id: 'singleton', saldoEfectivoActual: -monto },
-        });
-      }
-
-      await tx.pagoVenta.update({
-        where: { id: pagoActual.id },
-        data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
-      });
+      if (await revertirPagoVenta(tx, pagoActual, solicitadoPorId, autorizadoPorId)) cancelados++;
     }
+    // Otra peticion los cancelo todos mientras tanto (doble clic).
+    if (cancelados === 0) throw new PagoYaCanceladoError();
 
-    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, clienteId);
-    return { cancelados: pagosActivos.length, saldoTotalCliente };
+    const saldoTotalCliente = await calcularSaldoTotalCliente(tx, pagosActivos[0].venta.clienteId);
+    return { cancelados, saldoTotalCliente };
   });
+}
+
+/**
+ * Revierte un PagoVenta dentro de una transaccion: sube de nuevo el saldo
+ * de la nota, baja el efectivo/banco (o regresa el saldo a favor a las
+ * notas de donde salio) y lo marca cancelado.
+ *
+ * Primero lo marca cancelado, solo si todavia no lo estaba: si llegan dos
+ * cancelaciones a la vez (doble clic), la segunda espera el candado de la
+ * fila, no encuentra nada que marcar y regresa null sin mover dinero.
+ *
+ * Si la venta ya se habia cancelado, su dinero ya se devolvio al
+ * cancelarla (ver cancelarVenta) -- el pago solo se marca, sin volver a
+ * restarlo de caja ni ponerle saldo a una nota que ya no existe.
+ */
+async function revertirPagoVenta(
+  tx: Prisma.TransactionClient,
+  pagoActual: { id: string; ventaId: string; monto: Prisma.Decimal; metodoPago: string },
+  solicitadoPorId: string,
+  autorizadoPorId: string | null
+): Promise<{ nuevoSaldo: number } | null> {
+  const marcado = await tx.pagoVenta.updateMany({
+    where: { id: pagoActual.id, cancelado: false },
+    data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
+  });
+  if (marcado.count === 0) return null;
+
+  // Mismo candado que aplicarPagoVenta: bloquea la fila y vuelve a leer
+  // el saldoPendiente YA DENTRO de la transaccion.
+  await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${pagoActual.ventaId} FOR UPDATE`;
+  const ventaActual = await tx.venta.findUniqueOrThrow({ where: { id: pagoActual.ventaId } });
+  if (ventaActual.cancelada) return { nuevoSaldo: Number(ventaActual.saldoPendiente) };
+
+  const monto = Number(pagoActual.monto);
+  const total = Number(ventaActual.total);
+
+  await tx.pagoAsignacion.deleteMany({ where: { pagoId: pagoActual.id } });
+
+  const nuevoSaldo = redondearCentavos(Math.min(Number(ventaActual.saldoPendiente) + monto, total));
+
+  await tx.venta.update({
+    where: { id: pagoActual.ventaId },
+    data: {
+      saldoPendiente: nuevoSaldo,
+      estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
+    },
+  });
+
+  if (pagoActual.metodoPago === 'transferencia') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoBancoActual: { decrement: monto } },
+      create: { id: 'singleton', saldoBancoActual: -monto },
+    });
+  } else if (pagoActual.metodoPago === 'efectivo') {
+    await tx.configuracion.upsert({
+      where: { id: 'singleton' },
+      update: { saldoEfectivoActual: { decrement: monto } },
+      create: { id: 'singleton', saldoEfectivoActual: -monto },
+    });
+  } else if (pagoActual.metodoPago === 'saldo_favor') {
+    const pago = await tx.pagoVenta.findUniqueOrThrow({ where: { id: pagoActual.id } });
+    await restaurarSaldoAFavor(tx, pago);
+  }
+
+  return { nuevoSaldo };
 }
 
 export class ComprobantePagoNoEncontradoError extends Error {
@@ -497,7 +528,11 @@ async function aplicarPagoVenta(
   } else if (metodoPago === 'saldo_favor') {
     // No es dinero nuevo: se descuenta del saldo a favor que el cliente
     // ya tenia en otras notas (ver saldoAFavor.service.ts).
-    await consumirSaldoAFavor(tx, venta.clienteId, monto);
+    const consumos = await consumirSaldoAFavor(tx, venta.clienteId, monto, ventaId);
+    await tx.pagoVenta.update({
+      where: { id: pago.id },
+      data: { consumosSaldoFavor: consumos as unknown as Prisma.InputJsonValue },
+    });
   }
 
   return { pago, venta, saldoNotaRestante: nuevoSaldo };
@@ -703,51 +738,12 @@ export async function cancelarPagoVenta(
   }
 
   return prisma.$transaction(async (tx) => {
-    const monto = Number(pagoActual.monto);
-    const total = Number(pagoActual.venta.total);
+    const revertido = await revertirPagoVenta(tx, pagoActual, solicitadoPorId, autorizadoPorId);
+    if (!revertido) throw new PagoYaCanceladoError();
+    const nuevoSaldo = revertido.nuevoSaldo;
 
-    // Mismo candado que aplicarPagoVenta: bloquea la fila y vuelve a leer
-    // el saldoPendiente YA DENTRO de la transaccion, en vez de confiar en
-    // el valor que se leyo antes de entrar aqui (pagoActual.venta), que
-    // pudo quedar desactualizado si hubo otro pago/cancelacion a la misma
-    // nota mientras tanto.
-    await tx.$queryRaw`SELECT id FROM "Venta" WHERE id = ${pagoActual.ventaId} FOR UPDATE`;
-    const ventaActual = await tx.venta.findUniqueOrThrow({ where: { id: pagoActual.ventaId } });
-
-    await tx.pagoAsignacion.deleteMany({ where: { pagoId } });
-
-    const nuevoSaldo = redondearCentavos(Math.min(Number(ventaActual.saldoPendiente) + monto, total));
-
-    await tx.venta.update({
-      where: { id: pagoActual.ventaId },
-      data: {
-        saldoPendiente: nuevoSaldo,
-        estadoPago: nuevoSaldo >= total ? 'pendiente' : nuevoSaldo > 0 ? 'parcial' : 'pagada',
-      },
-    });
-
-    if (pagoActual.metodoPago === 'transferencia') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoBancoActual: { decrement: monto } },
-        create: { id: 'singleton', saldoBancoActual: -monto },
-      });
-    } else if (pagoActual.metodoPago === 'efectivo') {
-      await tx.configuracion.upsert({
-        where: { id: 'singleton' },
-        update: { saldoEfectivoActual: { decrement: monto } },
-        create: { id: 'singleton', saldoEfectivoActual: -monto },
-      });
-    }
-
-    const pagoCancelado = await tx.pagoVenta.update({
+    const pagoCancelado = await tx.pagoVenta.findUniqueOrThrow({
       where: { id: pagoId },
-      data: {
-        cancelado: true,
-        canceladoEn: new Date(),
-        canceladoPorId: solicitadoPorId,
-        autorizadoPorId,
-      },
       include: { registradoPor: true },
     });
 

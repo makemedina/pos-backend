@@ -1,5 +1,5 @@
 import { prisma } from '../prisma';
-import { crearVenta } from './ventas.service';
+import { crearVentaEnTx } from './ventas.service';
 
 interface ItemCotizacionInput {
   varianteId: string;
@@ -138,6 +138,12 @@ export async function obtenerCotizacion(id: string) {
  * exactamente la misma logica de crearVenta (FIFO, autorizacion por
  * precio bajo costo, saldo/pago) -- la cotizacion solo aporta el cliente
  * y los items ya acordados con el cliente.
+ *
+ * Marcar la cotizacion y crear la venta van en la misma transaccion: si
+ * se confirma dos veces a la vez (doble clic, o dos vendedores), la
+ * segunda ya no la encuentra 'enviada' y se rechaza -- en vez de crear
+ * dos notas y descontar el inventario doble. Si la venta falla (stock,
+ * autorizacion), la cotizacion se queda 'enviada'.
  */
 export async function confirmarCotizacion(
   cotizacionId: string,
@@ -155,31 +161,38 @@ export async function confirmarCotizacion(
     include: { items: true },
   });
 
-  if (cotizacion.estado !== 'enviada') {
-    throw new CotizacionYaResueltaError(cotizacion.estado);
-  }
+  return prisma.$transaction(async (tx) => {
+    const marcada = await tx.cotizacion.updateMany({
+      where: { id: cotizacionId, estado: 'enviada' },
+      data: { estado: 'confirmada', confirmadaEn: new Date() },
+    });
+    if (marcada.count === 0) {
+      const actual = await tx.cotizacion.findUniqueOrThrow({ where: { id: cotizacionId } });
+      throw new CotizacionYaResueltaError(actual.estado);
+    }
 
-  const resultado = await crearVenta({
-    vendedorId: datos.vendedorId,
-    clienteId: cotizacion.clienteId,
-    esCredito: datos.esCredito,
-    pagos: datos.pagos,
-    items: cotizacion.items.map((i) => ({
-      varianteId: i.varianteId,
-      cantidad: Number(i.cantidad),
-      precioUnitario: Number(i.precioUnitario),
-      autorizadoPorTelefono: datos.autorizadoPorTelefono,
-      autorizadoPin: datos.autorizadoPin,
-      motivoAutorizacion: datos.motivoAutorizacion,
-    })),
+    const resultado = await crearVentaEnTx(tx, {
+      vendedorId: datos.vendedorId,
+      clienteId: cotizacion.clienteId,
+      esCredito: datos.esCredito,
+      pagos: datos.pagos,
+      items: cotizacion.items.map((i) => ({
+        varianteId: i.varianteId,
+        cantidad: Number(i.cantidad),
+        precioUnitario: Number(i.precioUnitario),
+        autorizadoPorTelefono: datos.autorizadoPorTelefono,
+        autorizadoPin: datos.autorizadoPin,
+        motivoAutorizacion: datos.motivoAutorizacion,
+      })),
+    });
+
+    await tx.cotizacion.update({
+      where: { id: cotizacionId },
+      data: { ventaId: resultado.venta.id },
+    });
+
+    return resultado;
   });
-
-  await prisma.cotizacion.update({
-    where: { id: cotizacionId },
-    data: { estado: 'confirmada', confirmadaEn: new Date(), ventaId: resultado.venta.id },
-  });
-
-  return resultado;
 }
 
 /** No hay nada que revertir -- una cotizacion nunca toco inventario ni saldos. */

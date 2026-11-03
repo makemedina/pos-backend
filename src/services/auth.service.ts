@@ -156,22 +156,32 @@ export async function cerrarSesion(token: string) {
  * hace login), no un UUID interno.
  * Regresa el ID real del usuario si la autorizacion es valida (para
  * guardarlo en el registro de auditoria), o null si no lo es.
+ *
+ * Comparte el contador de intentos fallidos con el login (misma clave:
+ * el telefono). Sin esto, cualquier vendedor con sesion podria probar
+ * los 10,000 PINs del administrador por aqui -- este camino no pasaba por
+ * el limite de /auth/login -- y despues entrar como administrador.
  */
 export async function verificarAutorizadorPorTelefono(
   telefono: string,
   pin: string
 ): Promise<string | null> {
+  if (verificarBloqueo(telefono) !== null) return null;
+
   const usuario = await prisma.usuario.findUnique({
     where: { telefono },
     include: { permisos: true },
   });
 
-  if (!usuario || !usuario.activo) return null;
-  const autorizado = usuario.rolBase === 'administrador' || usuario.permisos?.puedeAutorizar;
-  if (!autorizado) return null;
+  const autorizado =
+    !!usuario?.activo && (usuario.rolBase === 'administrador' || !!usuario.permisos?.puedeAutorizar);
+  if (!autorizado || !(await bcrypt.compare(pin, usuario!.pin))) {
+    registrarIntentoFallido(telefono);
+    return null;
+  }
 
-  const pinValido = await bcrypt.compare(pin, usuario.pin);
-  return pinValido ? usuario.id : null;
+  limpiarIntentos(telefono);
+  return usuario!.id;
 }
 
 export async function verificarAutorizador(usuarioId: string, pin: string): Promise<boolean> {

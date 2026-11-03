@@ -323,6 +323,16 @@ export async function cancelarGasto(
   }
 
   return prisma.$transaction(async (tx) => {
+    // Se marca como cancelado PRIMERO, solo si todavia no lo estaba: si
+    // llegan dos cancelaciones a la vez (doble clic), la segunda espera el
+    // candado de la fila, no encuentra nada que marcar y se rechaza -- en
+    // vez de regresar el dinero dos veces.
+    const marcado = await tx.gasto.updateMany({
+      where: { id: gastoId, cancelado: false },
+      data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
+    });
+    if (marcado.count === 0) throw new GastoYaCanceladoError();
+
     if (gastoActual.metodoPago === 'transferencia') {
       await tx.configuracion.upsert({
         where: { id: 'singleton' },
@@ -337,14 +347,8 @@ export async function cancelarGasto(
       });
     }
 
-    const gasto = await tx.gasto.update({
+    const gasto = await tx.gasto.findUniqueOrThrow({
       where: { id: gastoId },
-      data: {
-        cancelado: true,
-        canceladoEn: new Date(),
-        canceladoPorId: solicitadoPorId,
-        autorizadoPorId,
-      },
       include: { categoria: true, registradoPor: true, proveedor: true },
     });
 

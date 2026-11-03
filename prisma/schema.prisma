@@ -383,6 +383,11 @@ model Venta {
   // retraso para no reportar ventas que se cancelan al rato -- ver
   // enviarComprasPendientesAMeta en metaCapi.service.ts. null = pendiente.
   metaRevisadaEn  DateTime?
+  // Id que genera el celular al capturar una venta sin conexion. Si la
+  // misma venta se vuelve a subir (se cayo la red despues de guardarla, o
+  // corrieron dos sincronizaciones a la vez), se regresa la que ya existe
+  // en vez de duplicarla.
+  idLocal         String?   @unique
 
   items      VentaItem[]
   pagos      PagoVenta[]
@@ -472,6 +477,10 @@ model PagoVenta {
   // cartera.service.ts) -- foto del comprobante de la transferencia,
   // mismo patron que Gasto.fotoComprobanteKey.
   fotoComprobanteKey String?
+  // Solo para metodoPago "saldo_favor": de que notas se tomo el saldo a
+  // favor y cuanto de cada una ([{ ventaId, monto }]), para regresarselo
+  // a esas mismas notas si este pago o su venta se cancelan.
+  consumosSaldoFavor Json?
 
   asignaciones PagoAsignacion[]
 

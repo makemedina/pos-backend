@@ -133,6 +133,16 @@ export async function cancelarDeposito(
   }
 
   return prisma.$transaction(async (tx) => {
+    // Se marca como cancelado PRIMERO, solo si todavia no lo estaba: si
+    // llegan dos cancelaciones a la vez (doble clic), la segunda espera el
+    // candado de la fila, no encuentra nada que marcar y se rechaza -- en
+    // vez de regresar el dinero dos veces.
+    const marcado = await tx.depositoBanco.updateMany({
+      where: { id: depositoId, cancelado: false },
+      data: { cancelado: true, canceladoEn: new Date(), canceladoPorId: solicitadoPorId, autorizadoPorId },
+    });
+    if (marcado.count === 0) throw new DepositoYaCanceladoError();
+
     const monto = Number(depositoActual.monto);
 
     await tx.configuracion.upsert({
@@ -144,14 +154,8 @@ export async function cancelarDeposito(
       create: { id: 'singleton', saldoEfectivoActual: monto, saldoBancoActual: -monto },
     });
 
-    return tx.depositoBanco.update({
+    return tx.depositoBanco.findUniqueOrThrow({
       where: { id: depositoId },
-      data: {
-        cancelado: true,
-        canceladoEn: new Date(),
-        canceladoPorId: solicitadoPorId,
-        autorizadoPorId,
-      },
       include: { registradoPor: true },
     });
   });

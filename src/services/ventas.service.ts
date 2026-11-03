@@ -1,6 +1,7 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
-import { consumirSaldoAFavor } from './saldoAFavor.service';
+import { consumirSaldoAFavor, restaurarSaldoAFavor } from './saldoAFavor.service';
 import { redondearCentavos } from '../utils/dinero';
 
 interface ItemVentaInput {
@@ -30,6 +31,9 @@ interface CrearVentaInput {
   // vacio o ausente equivale a credito total.
   pagos?: PagoInicialInput[];
   canalTicket?: string;
+  // Id que genera el celular para una venta capturada sin conexion (ver
+  // Venta.idLocal). Si ya existe una venta con este id, no se crea otra.
+  idLocal?: string;
 }
 
 export class StockInsuficienteError extends Error {
@@ -67,236 +71,276 @@ export class ClienteSinCreditoError extends Error {
  *    (asignacion automatica por default).
  */
 export async function crearVenta(input: CrearVentaInput) {
+  if (input.idLocal) {
+    const yaSubida = await ventaYaSubida(input.idLocal);
+    if (yaSubida) return yaSubida;
+  }
+
+  try {
+    // La venta se le avisa a Meta despues, desde una tarea programada (ver
+    // enviarComprasPendientesAMeta), para no reportar ventas que se cancelan.
+    return await prisma.$transaction((tx) => crearVentaEnTx(tx, input));
+  } catch (err) {
+    // Dos subidas simultaneas de la misma venta offline: la segunda choca
+    // con el indice unico de idLocal -- se regresa la que gano.
+    if (input.idLocal && err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const yaSubida = await ventaYaSubida(input.idLocal);
+      if (yaSubida) return yaSubida;
+    }
+    throw err;
+  }
+}
+
+async function ventaYaSubida(idLocal: string) {
+  const venta = await prisma.venta.findUnique({ where: { idLocal }, include: { items: true } });
+  if (!venta) return null;
+  return { venta, items: venta.items, saldoTotalCliente: null as number | null };
+}
+
+/**
+ * El cuerpo de crearVenta, dentro de una transaccion ya abierta -- para
+ * que confirmarCotizacion pueda marcar la cotizacion y crear la venta en
+ * la misma transaccion (todo o nada).
+ */
+export async function crearVentaEnTx(tx: Prisma.TransactionClient, input: CrearVentaInput) {
   if (input.esCredito) {
-    const cliente = await prisma.cliente.findUniqueOrThrow({ where: { id: input.clienteId } });
+    const cliente = await tx.cliente.findUniqueOrThrow({ where: { id: input.clienteId } });
     if (!cliente.permiteVentaCredito) {
       throw new ClienteSinCreditoError();
     }
   }
 
-  const resultado = await prisma.$transaction(async (tx) => {
-    const lineasCreadas: {
-      loteId: string;
-      cantidad: number;
-      precioLista: number;
-      precioUnitario: number;
-      costoUnitarioSnapshot: number;
-      autorizadoPorId?: string;
-      motivoAutorizacion?: string;
-      subtotal: number;
-    }[] = [];
+  // Bloquea los lotes de todas las variantes de la venta hasta que termine
+  // la transaccion. Sin esto, dos ventas simultaneas del mismo producto
+  // leen el mismo stock, las dos pasan la validacion y el lote queda en
+  // negativo. Se bloquean en orden de varianteId para que dos ventas con
+  // los mismos productos en distinto orden no se esperen una a la otra.
+  const varianteIds = [...new Set(input.items.map((i) => i.varianteId))].sort();
+  for (const varianteId of varianteIds) {
+    await tx.$queryRaw`SELECT id FROM "LoteInventario" WHERE "varianteId" = ${varianteId} FOR UPDATE`;
+  }
 
-    let total = 0;
+  const lineasCreadas: {
+    loteId: string;
+    cantidad: number;
+    precioLista: number;
+    precioUnitario: number;
+    costoUnitarioSnapshot: number;
+    autorizadoPorId?: string;
+    motivoAutorizacion?: string;
+    subtotal: number;
+  }[] = [];
 
-    for (const item of input.items) {
-      const variante = await tx.variante.findUniqueOrThrow({
-        where: { id: item.varianteId },
-      });
+  let total = 0;
 
-      // Lotes con stock disponible, del mas viejo al mas nuevo (FIFO)
-      const lotes = await tx.loteInventario.findMany({
-        where: { varianteId: item.varianteId, cantidadDisponible: { gt: 0 } },
-        orderBy: { fechaIngreso: 'asc' },
-      });
+  for (const item of input.items) {
+    const variante = await tx.variante.findUniqueOrThrow({
+      where: { id: item.varianteId },
+    });
 
-      const stockTotal = lotes.reduce(
-        (acc, l) => acc + Number(l.cantidadDisponible),
-        0
-      );
+    // Lotes con stock disponible, del mas viejo al mas nuevo (FIFO)
+    const lotes = await tx.loteInventario.findMany({
+      where: { varianteId: item.varianteId, cantidadDisponible: { gt: 0 } },
+      orderBy: { fechaIngreso: 'asc' },
+    });
 
-      if (stockTotal < item.cantidad) {
-        throw new StockInsuficienteError(item.varianteId, stockTotal, item.cantidad);
-      }
-
-      let cantidadRestante = item.cantidad;
-      let autorizadoPorIdResuelto: string | undefined; // el ID real, resuelto por telefono+pin
-
-      for (const lote of lotes) {
-        if (cantidadRestante <= 0) break;
-
-        const costoLote = Number(lote.costoUnitario);
-
-        // Si el precio ofrecido es menor al costo de ESTE lote especifico,
-        // se requiere autorizacion valida de un usuario real con permiso
-        // (se verifica su PIN, no solo que el campo venga presente).
-        if (item.precioUnitario < costoLote) {
-          if (!item.autorizadoPorTelefono || !item.autorizadoPin || !item.motivoAutorizacion) {
-            throw new PrecioBajoCostoSinAutorizarError(item.varianteId);
-          }
-          if (!autorizadoPorIdResuelto) {
-            const idResuelto = await verificarAutorizadorPorTelefono(
-              item.autorizadoPorTelefono,
-              item.autorizadoPin
-            );
-            if (!idResuelto) {
-              throw new PrecioBajoCostoSinAutorizarError(item.varianteId);
-            }
-            autorizadoPorIdResuelto = idResuelto;
-          }
-        }
-
-        const cantidadDeEsteLote = Math.min(
-          cantidadRestante,
-          Number(lote.cantidadDisponible)
-        );
-
-        // Descuenta del lote
-        await tx.loteInventario.update({
-          where: { id: lote.id },
-          data: {
-            cantidadDisponible: {
-              decrement: cantidadDeEsteLote,
-            },
-          },
-        });
-
-        const subtotal = redondearCentavos(cantidadDeEsteLote * item.precioUnitario);
-        total += subtotal;
-
-        lineasCreadas.push({
-          loteId: lote.id,
-          cantidad: cantidadDeEsteLote,
-          precioLista: Number(variante.precioVenta),
-          precioUnitario: item.precioUnitario,
-          costoUnitarioSnapshot: costoLote,
-          autorizadoPorId: autorizadoPorIdResuelto,
-          motivoAutorizacion: item.motivoAutorizacion,
-          subtotal,
-        });
-
-        cantidadRestante -= cantidadDeEsteLote;
-      }
-    }
-
-    total = redondearCentavos(total);
-
-    const pagosValidos = (input.pagos ?? []).filter((p) => p.monto > 0);
-    const montoPagadoAhora = redondearCentavos(
-      pagosValidos.reduce((acc, p) => acc + p.monto, 0)
+    const stockTotal = lotes.reduce(
+      (acc, l) => acc + Number(l.cantidadDisponible),
+      0
     );
 
-    const saldoPendiente = redondearCentavos(total - montoPagadoAhora);
-    const estadoPago =
-      saldoPendiente <= 0 ? 'pagada' : montoPagadoAhora > 0 ? 'parcial' : 'pendiente';
+    if (stockTotal < item.cantidad) {
+      throw new StockInsuficienteError(item.varianteId, stockTotal, item.cantidad);
+    }
 
-    // NO se recorta a 0: si el cliente pago de mas (efectivo o
-    // transferencia, credito o de contado), el excedente queda como
-    // saldoPendiente negativo -- saldo a favor del cliente, que se resta
-    // del resto de su cartera (igual que un abono de mas en cartera.service.ts).
-    const venta = await tx.venta.create({
+    let cantidadRestante = item.cantidad;
+    let autorizadoPorIdResuelto: string | undefined; // el ID real, resuelto por telefono+pin
+
+    for (const lote of lotes) {
+      if (cantidadRestante <= 0) break;
+
+      const costoLote = Number(lote.costoUnitario);
+
+      // Si el precio ofrecido es menor al costo de ESTE lote especifico,
+      // se requiere autorizacion valida de un usuario real con permiso
+      // (se verifica su PIN, no solo que el campo venga presente).
+      if (item.precioUnitario < costoLote) {
+        if (!item.autorizadoPorTelefono || !item.autorizadoPin || !item.motivoAutorizacion) {
+          throw new PrecioBajoCostoSinAutorizarError(item.varianteId);
+        }
+        if (!autorizadoPorIdResuelto) {
+          const idResuelto = await verificarAutorizadorPorTelefono(
+            item.autorizadoPorTelefono,
+            item.autorizadoPin
+          );
+          if (!idResuelto) {
+            throw new PrecioBajoCostoSinAutorizarError(item.varianteId);
+          }
+          autorizadoPorIdResuelto = idResuelto;
+        }
+      }
+
+      const cantidadDeEsteLote = Math.min(
+        cantidadRestante,
+        Number(lote.cantidadDisponible)
+      );
+
+      // Descuenta del lote
+      await tx.loteInventario.update({
+        where: { id: lote.id },
+        data: {
+          cantidadDisponible: {
+            decrement: cantidadDeEsteLote,
+          },
+        },
+      });
+
+      const subtotal = redondearCentavos(cantidadDeEsteLote * item.precioUnitario);
+      total += subtotal;
+
+      lineasCreadas.push({
+        loteId: lote.id,
+        cantidad: cantidadDeEsteLote,
+        precioLista: Number(variante.precioVenta),
+        precioUnitario: item.precioUnitario,
+        costoUnitarioSnapshot: costoLote,
+        autorizadoPorId: autorizadoPorIdResuelto,
+        motivoAutorizacion: item.motivoAutorizacion,
+        subtotal,
+      });
+
+      cantidadRestante -= cantidadDeEsteLote;
+    }
+  }
+
+  total = redondearCentavos(total);
+
+  const pagosValidos = (input.pagos ?? []).filter((p) => p.monto > 0);
+  const montoPagadoAhora = redondearCentavos(
+    pagosValidos.reduce((acc, p) => acc + p.monto, 0)
+  );
+
+  const saldoPendiente = redondearCentavos(total - montoPagadoAhora);
+  const estadoPago =
+    saldoPendiente <= 0 ? 'pagada' : montoPagadoAhora > 0 ? 'parcial' : 'pendiente';
+
+  // NO se recorta a 0: si el cliente pago de mas (efectivo o
+  // transferencia, credito o de contado), el excedente queda como
+  // saldoPendiente negativo -- saldo a favor del cliente, que se resta
+  // del resto de su cartera (igual que un abono de mas en cartera.service.ts).
+  const venta = await tx.venta.create({
+    data: {
+      vendedorId: input.vendedorId,
+      clienteId: input.clienteId,
+      total,
+      saldoPendiente,
+      esCredito: input.esCredito,
+      estadoPago,
+      canalTicket: input.canalTicket,
+      idLocal: input.idLocal,
+    },
+  });
+
+  const items = [];
+  for (const linea of lineasCreadas) {
+    const ventaItem = await tx.ventaItem.create({
       data: {
-        vendedorId: input.vendedorId,
-        clienteId: input.clienteId,
-        total,
-        saldoPendiente,
-        esCredito: input.esCredito,
-        estadoPago,
-        canalTicket: input.canalTicket,
+        ventaId: venta.id,
+        loteId: linea.loteId,
+        cantidad: linea.cantidad,
+        precioLista: linea.precioLista,
+        precioUnitario: linea.precioUnitario,
+        costoUnitarioSnapshot: linea.costoUnitarioSnapshot,
+        autorizadoPorId: linea.autorizadoPorId,
+        motivoAutorizacion: linea.motivoAutorizacion,
+      },
+    });
+    items.push({ ...ventaItem, subtotal: linea.subtotal });
+  }
+
+  // Pago inicial: puede venir repartido en varios metodos (ej. parte en
+  // efectivo y parte por transferencia) -- se crea un PagoVenta por cada
+  // metodo con monto > 0, cada uno con su propio reparto proporcional
+  // entre lineas (igual que un abono normal de Cartera).
+  //
+  // Si el cliente pago de mas, el excedente NO se reparte entre las
+  // lineas (ya no les falta nada) -- solo se reparte hasta cubrir lo que
+  // en verdad restaba, para que calcularUtilidadVenta() nunca calcule
+  // mas del 100% cobrado por producto. restantePorItem se va
+  // descontando conforme se procesa cada metodo de pago.
+  const restantePorItem = items.map((item) => item.subtotal);
+
+  for (const pagoInput of pagosValidos) {
+    const pago = await tx.pagoVenta.create({
+      data: {
+        ventaId: venta.id,
+        monto: pagoInput.monto,
+        metodoPago: pagoInput.metodoPago,
       },
     });
 
-    const items = [];
-    for (const linea of lineasCreadas) {
-      const ventaItem = await tx.ventaItem.create({
-        data: {
-          ventaId: venta.id,
-          loteId: linea.loteId,
-          cantidad: linea.cantidad,
-          precioLista: linea.precioLista,
-          precioUnitario: linea.precioUnitario,
-          costoUnitarioSnapshot: linea.costoUnitarioSnapshot,
-          autorizadoPorId: linea.autorizadoPorId,
-          motivoAutorizacion: linea.motivoAutorizacion,
-        },
-      });
-      items.push({ ...ventaItem, subtotal: linea.subtotal });
-    }
+    const totalRestante = restantePorItem.reduce((acc, r) => acc + r, 0);
+    const montoAAsignar = Math.min(pagoInput.monto, totalRestante);
 
-    // Pago inicial: puede venir repartido en varios metodos (ej. parte en
-    // efectivo y parte por transferencia) -- se crea un PagoVenta por cada
-    // metodo con monto > 0, cada uno con su propio reparto proporcional
-    // entre lineas (igual que un abono normal de Cartera).
-    //
-    // Si el cliente pago de mas, el excedente NO se reparte entre las
-    // lineas (ya no les falta nada) -- solo se reparte hasta cubrir lo que
-    // en verdad restaba, para que calcularUtilidadVenta() nunca calcule
-    // mas del 100% cobrado por producto. restantePorItem se va
-    // descontando conforme se procesa cada metodo de pago.
-    const restantePorItem = items.map((item) => item.subtotal);
+    if (totalRestante > 0 && montoAAsignar > 0) {
+      for (let i = 0; i < items.length; i++) {
+        if (restantePorItem[i] <= 0) continue;
+        const proporcion = restantePorItem[i] / totalRestante;
+        const montoAsignado = montoAAsignar * proporcion;
 
-    for (const pagoInput of pagosValidos) {
-      const pago = await tx.pagoVenta.create({
-        data: {
-          ventaId: venta.id,
-          monto: pagoInput.monto,
-          metodoPago: pagoInput.metodoPago,
-        },
-      });
-
-      const totalRestante = restantePorItem.reduce((acc, r) => acc + r, 0);
-      const montoAAsignar = Math.min(pagoInput.monto, totalRestante);
-
-      if (totalRestante > 0 && montoAAsignar > 0) {
-        for (let i = 0; i < items.length; i++) {
-          if (restantePorItem[i] <= 0) continue;
-          const proporcion = restantePorItem[i] / totalRestante;
-          const montoAsignado = montoAAsignar * proporcion;
-
-          await tx.pagoAsignacion.create({
-            data: {
-              pagoId: pago.id,
-              ventaItemId: items[i].id,
-              montoAsignado,
-            },
-          });
-          restantePorItem[i] -= montoAsignado;
-        }
-      }
-
-      // El saldo bancario o en efectivo sube solo, segun el metodo de pago.
-      // "saldo_favor" no es dinero nuevo: se descuenta del saldo a favor
-      // que el cliente ya tenia en otras notas, no de efectivo/banco.
-      if (pagoInput.metodoPago === 'transferencia') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoBancoActual: { increment: pagoInput.monto } },
-          create: { id: 'singleton', saldoBancoActual: pagoInput.monto },
+        await tx.pagoAsignacion.create({
+          data: {
+            pagoId: pago.id,
+            ventaItemId: items[i].id,
+            montoAsignado,
+          },
         });
-      } else if (pagoInput.metodoPago === 'efectivo') {
-        await tx.configuracion.upsert({
-          where: { id: 'singleton' },
-          update: { saldoEfectivoActual: { increment: pagoInput.monto } },
-          create: { id: 'singleton', saldoEfectivoActual: pagoInput.monto },
-        });
-      } else if (pagoInput.metodoPago === 'saldo_favor') {
-        await consumirSaldoAFavor(tx, input.clienteId, pagoInput.monto);
+        restantePorItem[i] -= montoAsignado;
       }
     }
 
-    // El recibo necesita mostrar el saldo total actualizado del cliente
-    // (sumando todas sus notas a credito, incluida esta si aplica -- y
-    // tambien cualquier saldo a favor por sobrepago en ventas de contado).
-    const [ventasCliente, cliente] = await Promise.all([
-      tx.venta.aggregate({
-        where: {
-          clienteId: input.clienteId,
-          cancelada: false,
-          OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }],
-        },
-        _sum: { saldoPendiente: true },
-      }),
-      tx.cliente.findUniqueOrThrow({ where: { id: input.clienteId } }),
-    ]);
-    const saldoTotalCliente =
-      Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
+    // El saldo bancario o en efectivo sube solo, segun el metodo de pago.
+    // "saldo_favor" no es dinero nuevo: se descuenta del saldo a favor
+    // que el cliente ya tenia en otras notas, no de efectivo/banco.
+    if (pagoInput.metodoPago === 'transferencia') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoBancoActual: { increment: pagoInput.monto } },
+        create: { id: 'singleton', saldoBancoActual: pagoInput.monto },
+      });
+    } else if (pagoInput.metodoPago === 'efectivo') {
+      await tx.configuracion.upsert({
+        where: { id: 'singleton' },
+        update: { saldoEfectivoActual: { increment: pagoInput.monto } },
+        create: { id: 'singleton', saldoEfectivoActual: pagoInput.monto },
+      });
+    } else if (pagoInput.metodoPago === 'saldo_favor') {
+      const consumos = await consumirSaldoAFavor(tx, input.clienteId, pagoInput.monto, venta.id);
+      await tx.pagoVenta.update({
+        where: { id: pago.id },
+        data: { consumosSaldoFavor: consumos as unknown as Prisma.InputJsonValue },
+      });
+    }
+  }
 
-    return { venta, items, saldoTotalCliente };
-  });
+  // El recibo necesita mostrar el saldo total actualizado del cliente
+  // (sumando todas sus notas a credito, incluida esta si aplica -- y
+  // tambien cualquier saldo a favor por sobrepago en ventas de contado).
+  const [ventasCliente, cliente] = await Promise.all([
+    tx.venta.aggregate({
+      where: {
+        clienteId: input.clienteId,
+        cancelada: false,
+        OR: [{ esCredito: true }, { saldoPendiente: { lt: 0 } }],
+      },
+      _sum: { saldoPendiente: true },
+    }),
+    tx.cliente.findUniqueOrThrow({ where: { id: input.clienteId } }),
+  ]);
+  const saldoTotalCliente =
+    Number(ventasCliente._sum.saldoPendiente ?? 0) + Number(cliente.saldoInicial);
 
-  // La venta se le avisa a Meta despues, desde una tarea programada (ver
-  // enviarComprasPendientesAMeta), para no reportar ventas que se cancelan.
-
-  return resultado;
+  return { venta, items, saldoTotalCliente: saldoTotalCliente as number | null };
 }
 
 /**
@@ -406,14 +450,28 @@ export async function cancelarVenta(
   }
 
   return prisma.$transaction(async (tx) => {
-    const venta = await tx.venta.findUniqueOrThrow({
-      where: { id: ventaId },
-      include: { items: true, pagos: true },
+    // Se marca como cancelada PRIMERO, solo si todavia no lo estaba. El
+    // UPDATE bloquea la fila: si llegan dos cancelaciones a la vez (doble
+    // clic), la segunda espera, ya no encuentra la venta sin cancelar y se
+    // rechaza -- en vez de regresar el stock y el dinero dos veces.
+    const marcada = await tx.venta.updateMany({
+      where: { id: ventaId, cancelada: false },
+      data: {
+        cancelada: true,
+        canceladaEn: new Date(),
+        canceladaPorId: solicitadoPorId,
+        autorizadaPorId,
+        saldoPendiente: 0,
+      },
     });
-
-    if (venta.cancelada) {
+    if (marcada.count === 0) {
       throw new VentaYaCanceladaError();
     }
+
+    const venta = await tx.venta.findUniqueOrThrow({
+      where: { id: ventaId },
+      include: { items: true, pagos: { where: { cancelado: false } } },
+    });
 
     for (const item of venta.items) {
       await tx.loteInventario.update({
@@ -424,7 +482,8 @@ export async function cancelarVenta(
 
     // Si algo de lo pagado fue por transferencia o en efectivo, se le
     // regresa al saldo correspondiente -- esa venta ya no existe, ese
-    // dinero no se debe seguir contando como ingresado por ella.
+    // dinero no se debe seguir contando como ingresado por ella. Los pagos
+    // ya cancelados no: esos ya se habian devuelto al cancelarlos.
     const pagadoPorTransferencia = venta.pagos
       .filter((p) => p.metodoPago === 'transferencia')
       .reduce((acc, p) => acc + Number(p.monto), 0);
@@ -445,16 +504,12 @@ export async function cancelarVenta(
         create: { id: 'singleton', saldoEfectivoActual: -pagadoEnEfectivo },
       });
     }
+    // Lo que se pago con saldo a favor regresa a las notas de donde salio.
+    for (const pago of venta.pagos.filter((p) => p.metodoPago === 'saldo_favor')) {
+      await restaurarSaldoAFavor(tx, pago);
+    }
 
-    return tx.venta.update({
-      where: { id: ventaId },
-      data: {
-        cancelada: true,
-        canceladaEn: new Date(),
-        canceladaPorId: solicitadoPorId,
-        autorizadaPorId,
-        saldoPendiente: 0,
-      },
-    });
+    const { items: _items, pagos: _pagos, ...ventaCancelada } = venta;
+    return ventaCancelada;
   });
 }
