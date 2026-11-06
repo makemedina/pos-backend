@@ -77,6 +77,26 @@ Deberias ver: `Servidor corriendo en http://localhost:3000`
 Prueba que funciona abriendo esa direccion en tu navegador — deberias ver un
 JSON con `{"status":"ok", ...}`.
 
+## Usuario de base de datos de la app (produccion)
+
+En Railway la app NO se conecta como `postgres` (superusuario), sino con un
+usuario propio sin poderes especiales: es dueno de las tablas (puede correr
+migraciones, respaldos y restauraciones), pero no puede crear usuarios ni
+bases, ni leer archivos o ejecutar comandos en el servidor.
+
+Se crea (o se le cambia la contrasena) con
+[`prisma/sql/crear-rol-app.sql`](prisma/sql/crear-rol-app.sql), conectado
+como superusuario a la base de la app:
+
+```bash
+psql "<URL del superusuario>" -v rol=pos_app -v clave='<contrasena larga>' \
+     -f prisma/sql/crear-rol-app.sql
+```
+
+Luego, en el servicio de la app, `DATABASE_URL` apunta a ese usuario:
+`postgresql://pos_app:<contrasena>@postgres.railway.internal:5432/railway`.
+La contrasena del superusuario se queda solo en el servicio de Postgres.
+
 ## Explorar la base de datos visualmente (opcional pero util)
 
 Prisma trae una herramienta visual para ver y editar los datos sin escribir

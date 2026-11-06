@@ -176,15 +176,22 @@ export async function eliminarBackup(key: string) {
  * poder deshacerlo si se eligio el respaldo equivocado.
  */
 export async function restaurarBackup(key: string): Promise<void> {
-  const { url: databaseUrl } = requiereDatabaseUrl();
+  const { url: databaseUrl, schema } = requiereDatabaseUrl();
 
   await crearBackup('pre-restauracion');
 
   const cuerpo = await descargarBackup(key);
 
+  // --schema restaura solo lo que esta DENTRO del esquema (tablas, datos,
+  // indices, enums) y no intenta borrar/crear el esquema en si. La app se
+  // conecta con un usuario que no es superusuario (ver
+  // prisma/sql/crear-rol-app.sql): es dueno de las tablas, pero no del
+  // esquema public, asi que el DROP/CREATE SCHEMA que trae el respaldo
+  // fallaria y pg_restore terminaria con error aunque los datos sí se
+  // hubieran restaurado.
   const proceso = spawn(
     'pg_restore',
-    ['--clean', '--if-exists', '--no-owner', '--no-privileges', '--dbname', databaseUrl],
+    ['--clean', '--if-exists', '--no-owner', '--no-privileges', `--schema=${schema}`, '--dbname', databaseUrl],
     { stdio: ['pipe', 'ignore', 'pipe'] }
   );
 
