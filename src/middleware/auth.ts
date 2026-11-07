@@ -38,7 +38,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'No autenticado' });
   }
 
-  const usuario = await obtenerUsuarioPorToken(token);
+  let usuario;
+  try {
+    usuario = await obtenerUsuarioPorToken(token);
+  } catch (err) {
+    return next(err);
+  }
   if (!usuario) {
     return res.status(401).json({ error: 'Sesion invalida o expirada' });
   }

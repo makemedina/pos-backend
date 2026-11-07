@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import { randomUUID } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { prisma } from '../prisma';
 import { verificarBloqueo, registrarIntentoFallido, limpiarIntentos } from './loginLimiter';
 
@@ -8,6 +8,38 @@ const RONDAS_BCRYPT = 10;
 // un dia laboral completo, para que no pida iniciar sesion de nuevo si
 // la PWA se queda en segundo plano durante una comida o un rato sin usarse.
 const DURACION_SESION_HORAS = 12;
+// Tope absoluto: aunque se use todos los dias, la sesion muere a los N dias
+// de creada y hay que volver a poner el PIN (SOC 2 CC6.1 / ISO 27001 A.8.5).
+const MAX_SESION_DIAS = Number(process.env.SESION_MAX_DIAS) || 7;
+
+const ROLES_VALIDOS = ['vendedor', 'administrador'];
+const PIN_REGEX = /^\d{4,8}$/;
+// Hash de relleno para que un telefono inexistente tarde lo mismo que uno
+// real (si no, el tiempo de respuesta delata que usuarios existen).
+const HASH_RELLENO = bcrypt.hashSync('relleno-no-es-un-pin', RONDAS_BCRYPT);
+
+export class PinInvalidoError extends Error {
+  constructor() {
+    super('El PIN debe tener entre 4 y 8 digitos (solo numeros).');
+  }
+}
+
+export class DatosUsuarioInvalidosError extends Error {}
+
+export function validarPin(pin: unknown): asserts pin is string {
+  if (typeof pin !== 'string' || !PIN_REGEX.test(pin)) throw new PinInvalidoError();
+}
+
+/** Lo que se guarda en Sesion.token: el SHA-256 del token, nunca el token. */
+export function hashToken(token: string) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function expiracionDeslizante(creadaEn: Date) {
+  const deslizante = Date.now() + DURACION_SESION_HORAS * 60 * 60 * 1000;
+  const absoluta = creadaEn.getTime() + MAX_SESION_DIAS * 24 * 60 * 60 * 1000;
+  return new Date(Math.min(deslizante, absoluta));
+}
 
 export interface UsuarioSesion {
   id: string;
@@ -60,6 +92,9 @@ export async function loginUsuario(
   identificador: string,
   pin: string
 ): Promise<{ token: string; usuario: UsuarioSesion }> {
+  if (typeof identificador !== 'string' || typeof pin !== 'string' || !identificador.trim()) {
+    throw new Error('Credenciales invalidas');
+  }
   const minutosBloqueado = verificarBloqueo(identificador);
   if (minutosBloqueado !== null) {
     throw new LoginBloqueadoError(minutosBloqueado);
@@ -77,6 +112,7 @@ export async function loginUsuario(
   });
 
   if (!usuario || !usuario.activo) {
+    await bcrypt.compare(pin, HASH_RELLENO);
     registrarIntentoFallido(identificador);
     throw new Error('Credenciales invalidas');
   }
@@ -89,11 +125,11 @@ export async function loginUsuario(
 
   limpiarIntentos(identificador);
 
-  const token = randomUUID();
-  const expiraEn = new Date(Date.now() + DURACION_SESION_HORAS * 60 * 60 * 1000);
+  const token = randomBytes(32).toString('base64url');
+  const expiraEn = expiracionDeslizante(new Date());
 
   await prisma.sesion.create({
-    data: { token, usuarioId: usuario.id, expiraEn },
+    data: { token: hashToken(token), usuarioId: usuario.id, expiraEn },
   });
 
   return {
@@ -110,21 +146,20 @@ export async function loginUsuario(
 
 /** Usado por el middleware requireAuth en cada request protegida. */
 export async function obtenerUsuarioPorToken(token: string) {
+  const tokenHash = hashToken(token);
   const sesion = await prisma.sesion.findUnique({
-    where: { token },
+    where: { token: tokenHash },
     include: { usuario: { include: { permisos: true } } },
   });
 
   if (!sesion || sesion.expiraEn < new Date()) return null;
   if (!sesion.usuario.activo) return null;
 
-  // Ventana deslizante: cada peticion valida renueva la sesion otra hora
-  // mas. Mientras la app se siga usando (sin cerrar la pagina) la sesion
-  // nunca expira; si queda inactiva 1 hora completa, si.
-  const nuevaExpiracion = new Date(Date.now() + DURACION_SESION_HORAS * 60 * 60 * 1000);
+  // Ventana deslizante: cada peticion valida renueva la sesion otras
+  // DURACION_SESION_HORAS, sin pasar del tope absoluto de MAX_SESION_DIAS.
   await prisma.sesion.update({
-    where: { token },
-    data: { expiraEn: nuevaExpiracion },
+    where: { token: tokenHash },
+    data: { expiraEn: expiracionDeslizante(sesion.creadaEn) },
   });
 
   return {
@@ -137,7 +172,15 @@ export async function obtenerUsuarioPorToken(token: string) {
 }
 
 export async function cerrarSesion(token: string) {
-  await prisma.sesion.deleteMany({ where: { token } });
+  await prisma.sesion.deleteMany({ where: { token: hashToken(token) } });
+}
+
+/** Cierra todas las sesiones de un usuario (menos, si se indica, la actual). */
+export async function revocarSesionesUsuario(usuarioId: string, exceptoToken?: string | null) {
+  const { count } = await prisma.sesion.deleteMany({
+    where: { usuarioId, ...(exceptoToken ? { token: { not: hashToken(exceptoToken) } } : {}) },
+  });
+  return count;
 }
 
 /**
@@ -212,6 +255,13 @@ export async function crearUsuario(datos: {
   pin: string;
   rolBase?: string;
 }) {
+  validarPin(datos.pin);
+  if (typeof datos.nombre !== 'string' || !datos.nombre.trim() || typeof datos.telefono !== 'string' || !datos.telefono.trim()) {
+    throw new DatosUsuarioInvalidosError('Nombre y telefono son obligatorios.');
+  }
+  if (datos.rolBase !== undefined && !ROLES_VALIDOS.includes(datos.rolBase)) {
+    throw new DatosUsuarioInvalidosError('Rol invalido.');
+  }
   const pinHash = await bcrypt.hash(datos.pin, RONDAS_BCRYPT);
 
   const usuario = await prisma.usuario.create({
@@ -240,6 +290,7 @@ export async function crearUsuario(datos: {
 }
 
 export async function cambiarPinUsuario(usuarioId: string, nuevoPin: string) {
+  validarPin(nuevoPin);
   const pinHash = await bcrypt.hash(nuevoPin, RONDAS_BCRYPT);
   const usuario = await prisma.usuario.update({
     where: { id: usuarioId },
@@ -251,7 +302,7 @@ export async function cambiarPinUsuario(usuarioId: string, nuevoPin: string) {
 
 export async function actualizarUsuario(
   usuarioId: string,
-  datos: { nombre?: string; telefono?: string }
+  datos: { nombre?: string; telefono?: string; activo?: boolean }
 ) {
   const usuario = await prisma.usuario.update({
     where: { id: usuarioId },

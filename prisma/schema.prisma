@@ -75,11 +75,15 @@ model PushSubscription {
 // de identidad en las llamadas posteriores al login.
 model Sesion {
   id        String   @id @default(uuid())
+  // SHA-256 del token (hex). El token en claro solo lo tiene el cliente:
+  // una copia de la base o un respaldo filtrado no sirve para entrar.
   token     String   @unique
   usuarioId String
   usuario   Usuario  @relation(fields: [usuarioId], references: [id])
   creadaEn  DateTime @default(now())
   expiraEn  DateTime
+
+  @@index([usuarioId])
 }
 
 model PermisosUsuario {
@@ -765,4 +769,23 @@ model ConexionWhatsapp {
   // dentro de las 24 h siguientes a conectar.
   sincronizadoEn DateTime?
   ultimoError    String?
+}
+
+// Bitacora de seguridad (SOC 2 CC7.2 / ISO 27001 A.8.15): quien hizo que
+// accion sensible, cuando y desde donde. Solo se agregan filas; nunca se
+// editan. El cron borra las de mas de BITACORA_RETENCION_DIAS (365).
+model BitacoraSeguridad {
+  id        String   @id @default(uuid())
+  creadoEn  DateTime @default(now())
+  evento    String // ej. "login.ok", "usuario.pin_cambiado", "backup.restaurado"
+  resultado String   @default("ok") // "ok" | "fallo" | "bloqueado"
+  usuarioId String? // quien lo hizo (null si no hay sesion, ej. login fallido)
+  objetivo  String? // sobre quien/que (id de usuario, key de respaldo...)
+  ip        String?
+  userAgent String?
+  detalle   Json?
+
+  @@index([creadoEn])
+  @@index([evento, creadoEn])
+  @@index([usuarioId, creadoEn])
 }

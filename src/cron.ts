@@ -3,6 +3,7 @@ import { crearBackup, BackupNoConfiguradoError } from './services/backup.service
 import { sugerirDiasCompraAutomaticamente } from './services/clientes.service';
 import { notificarPendientesDeHoy } from './services/push.service';
 import { enviarComprasPendientesAMeta } from './services/metaCapi.service';
+import { purgarBitacoraYSesiones } from './services/bitacora.service';
 
 /**
  * Respaldo automatico de toda la base de datos, todos los dias a
@@ -59,6 +60,20 @@ export function iniciarTareasProgramadas() {
         console.log(`[pendientes push] ${enviados} notificacion(es) enviada(s)`);
       } catch (err) {
         console.error('[pendientes push] Fallo:', err);
+      }
+    },
+    { timezone: 'America/Mazatlan' }
+  );
+
+  // Retencion: borra sesiones vencidas y bitacora de mas de un año.
+  cron.schedule(
+    '15 1 * * *',
+    async () => {
+      try {
+        const { bitacora, sesiones } = await purgarBitacoraYSesiones();
+        console.log(`[retencion] ${sesiones} sesion(es) vencida(s) y ${bitacora} evento(s) de bitacora borrados`);
+      } catch (err) {
+        console.error('[retencion] Fallo:', err);
       }
     },
     { timezone: 'America/Mazatlan' }

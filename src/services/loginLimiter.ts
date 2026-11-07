@@ -53,3 +53,39 @@ export function registrarIntentoFallido(identificador: string) {
 export function limpiarIntentos(identificador: string) {
   intentosPorIdentificador.delete(normalizar(identificador));
 }
+
+// ---- Limite por IP ----
+// El limite por identificador no frena a quien prueba PINs comunes contra
+// muchos telefonos distintos. Este cuenta los fallos por IP en una ventana
+// fija: pasado el maximo, esa IP no puede intentar login por un rato.
+const MAX_FALLOS_POR_IP = 30;
+const VENTANA_IP_MIN = 15;
+const fallosPorIp = new Map<string, { fallos: number; desde: number }>();
+
+export function ipBloqueada(ip: string | undefined | null): boolean {
+  if (!ip) return false;
+  const estado = fallosPorIp.get(ip);
+  if (!estado) return false;
+  if (Date.now() - estado.desde > VENTANA_IP_MIN * 60 * 1000) {
+    fallosPorIp.delete(ip);
+    return false;
+  }
+  return estado.fallos >= MAX_FALLOS_POR_IP;
+}
+
+export function registrarFalloIp(ip: string | undefined | null) {
+  if (!ip) return;
+  const ahora = Date.now();
+  const estado = fallosPorIp.get(ip);
+  if (!estado || ahora - estado.desde > VENTANA_IP_MIN * 60 * 1000) {
+    fallosPorIp.set(ip, { fallos: 1, desde: ahora });
+  } else {
+    estado.fallos += 1;
+  }
+  // Evita que el mapa crezca sin limite si llegan miles de IPs distintas.
+  if (fallosPorIp.size > 10000) {
+    for (const [clave, valor] of fallosPorIp) {
+      if (ahora - valor.desde > VENTANA_IP_MIN * 60 * 1000) fallosPorIp.delete(clave);
+    }
+  }
+}

@@ -79,7 +79,12 @@ import {
   loginUsuario,
   cerrarSesion,
   LoginBloqueadoError,
+  PinInvalidoError,
+  DatosUsuarioInvalidosError,
+  revocarSesionesUsuario,
 } from '../services/auth.service';
+import { registrarEvento, listarBitacora } from '../services/bitacora.service';
+import { ipBloqueada, registrarFalloIp } from '../services/loginLimiter';
 import {
   resumenCarteraClientes,
   notasAntiguas,
@@ -148,15 +153,24 @@ export const router = Router();
 // ---------- AUTENTICACION (unica ruta publica) ----------
 
 router.post('/auth/login', async (req, res) => {
+  const { telefono, pin } = req.body || {};
+  const identificador = typeof telefono === 'string' ? telefono.slice(0, 100) : null;
+  if (ipBloqueada(req.ip)) {
+    await registrarEvento(req, 'login', { resultado: 'bloqueado', detalle: { identificador, motivo: 'ip' } });
+    return res.status(429).json({ error: 'Demasiados intentos desde esta red. Espera unos minutos.', code: 'LOGIN_BLOQUEADO' });
+  }
   try {
-    const { telefono, pin } = req.body;
     const resultado = await loginUsuario(telefono, pin);
+    await registrarEvento(req, 'login', { usuarioId: resultado.usuario.id });
     res.json(resultado);
   } catch (err) {
+    registrarFalloIp(req.ip);
     if (err instanceof LoginBloqueadoError) {
+      await registrarEvento(req, 'login', { resultado: 'bloqueado', detalle: { identificador } });
       return res.status(429).json({ error: err.message, code: 'LOGIN_BLOQUEADO' });
     }
-    console.error(err);
+    await registrarEvento(req, 'login', { resultado: 'fallo', detalle: { identificador } });
+    if ((err as Error).message !== 'Credenciales invalidas') console.error(err);
     res.status(401).json({ error: 'Credenciales invalidas' });
   }
 });
@@ -182,6 +196,7 @@ router.get('/configuracion', async (_req, res) => {
 router.put('/configuracion', requiereAdmin, async (req, res) => {
   try {
     const config = await actualizarConfiguracion(req.body);
+    await registrarEvento(req, 'configuracion.actualizada', { detalle: { campos: Object.keys(req.body || {}) } });
     res.json(config);
   } catch (err) {
     console.error(err);
@@ -221,6 +236,7 @@ router.post('/admin/resetear-transacciones', requiereAdmin, async (req, res) => 
     }
 
     await ejecutarReset(confirmacion, opciones);
+    await registrarEvento(req, 'admin.reset_transacciones', { detalle: { opciones, respaldoCreado } as any });
     res.json({ ok: true, respaldoCreado });
   } catch (err) {
     if (err instanceof ConfirmacionInvalidaError) {
@@ -275,9 +291,10 @@ router.post('/admin/corregir-estados-pago', requiereAdmin, async (_req, res) => 
 
 // ---------- RESPALDOS (pg_dump completo, subido a Cloudflare R2) ----------
 
-router.post('/admin/backups', requiereAdmin, async (_req, res) => {
+router.post('/admin/backups', requiereAdmin, async (req, res) => {
   try {
     const info = await crearBackup('manual');
+    await registrarEvento(req, 'backup.creado', { objetivo: info.key });
     res.status(201).json(info);
   } catch (err) {
     if (err instanceof BackupNoConfiguradoError) {
@@ -343,8 +360,10 @@ router.get('/admin/backups/descargar', requiereAdmin, async (req, res) => {
     const key = req.query.key as string;
     if (!key) return res.status(400).json({ error: 'Falta el respaldo a descargar.' });
     const stream = await descargarBackup(key);
+    await registrarEvento(req, 'backup.descargado', { objetivo: key });
+    const nombreArchivo = (key.split('/').pop() || 'respaldo').replace(/[^\w.\-]/g, '_');
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${key.split('/').pop()}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${nombreArchivo}"`);
     stream.pipe(res);
   } catch (err) {
     if (err instanceof BackupNoConfiguradoError) {
@@ -360,6 +379,7 @@ router.delete('/admin/backups', requiereAdmin, async (req, res) => {
     const key = req.query.key as string;
     if (!key) return res.status(400).json({ error: 'Falta el respaldo a eliminar.' });
     await eliminarBackup(key);
+    await registrarEvento(req, 'backup.eliminado', { objetivo: key });
     res.status(204).send();
   } catch (err) {
     if (err instanceof BackupNoConfiguradoError) {
@@ -382,7 +402,11 @@ router.post('/admin/backups/restaurar', requiereAdmin, async (req, res) => {
     if (confirmacion !== 'RESTAURAR') {
       return res.status(400).json({ error: 'Escribe RESTAURAR para confirmar.', code: 'CONFIRMACION_INVALIDA' });
     }
+    await registrarEvento(req, 'backup.restauracion_iniciada', { objetivo: key });
     await restaurarBackup(key);
+    // La restauracion reemplaza la base completa (incluida esta bitacora),
+    // asi que el evento final se escribe despues, ya sobre la base restaurada.
+    await registrarEvento(req, 'backup.restaurado', { objetivo: key });
     res.json({ ok: true });
   } catch (err) {
     if (err instanceof BackupNoConfiguradoError) {
@@ -397,6 +421,7 @@ router.post('/auth/logout', async (req, res) => {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (token) await cerrarSesion(token);
+  await registrarEvento(req, 'logout');
   res.status(204).send();
 });
 
@@ -423,9 +448,17 @@ router.get('/usuarios', requiereAdmin, async (_req, res) => {
 
 router.post('/usuarios', requiereAdmin, async (req, res) => {
   try {
-    const usuario = await crearUsuario(req.body);
+    const { nombre, telefono, pin, rolBase } = req.body || {};
+    const usuario = await crearUsuario({ nombre, telefono, pin, rolBase });
+    await registrarEvento(req, 'usuario.creado', { objetivo: usuario.id, detalle: { rolBase: usuario.rolBase } });
     res.status(201).json(usuario);
   } catch (err) {
+    if (err instanceof PinInvalidoError || err instanceof DatosUsuarioInvalidosError) {
+      return res.status(400).json({ error: err.message });
+    }
+    if ((err as any)?.code === 'P2002') {
+      return res.status(409).json({ error: 'Ya existe un usuario con ese telefono.' });
+    }
     console.error(err);
     res.status(500).json({ error: 'Error al crear el usuario' });
   }
@@ -439,9 +472,16 @@ router.put('/usuarios/:id/pin', async (req, res) => {
     if (!esUnoMismo && req.usuario!.rolBase !== 'administrador') {
       return res.status(403).json({ error: 'Solo puedes cambiar tu propio PIN' });
     }
-    const usuario = await cambiarPinUsuario(req.params.id, req.body.pin);
+    const usuario = await cambiarPinUsuario(req.params.id, req.body?.pin);
+    // Un PIN nuevo invalida todas las demas sesiones de ese usuario (si
+    // alguien mas conocia el PIN anterior, queda fuera).
+    const header = req.headers.authorization || '';
+    const tokenActual = esUnoMismo && header.startsWith('Bearer ') ? header.slice(7) : null;
+    const sesionesCerradas = await revocarSesionesUsuario(req.params.id, tokenActual);
+    await registrarEvento(req, 'usuario.pin_cambiado', { objetivo: req.params.id, detalle: { sesionesCerradas } });
     res.json(usuario);
   } catch (err) {
+    if (err instanceof PinInvalidoError) return res.status(400).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'Error al cambiar el PIN' });
   }
@@ -453,8 +493,9 @@ router.put('/usuarios/:id', async (req, res) => {
     if (!esUnoMismo && req.usuario!.rolBase !== 'administrador') {
       return res.status(403).json({ error: 'Solo puedes editar tus propios datos' });
     }
-    const { nombre, telefono } = req.body;
+    const { nombre, telefono } = req.body || {};
     const usuario = await actualizarUsuario(req.params.id, { nombre, telefono });
+    await registrarEvento(req, 'usuario.actualizado', { objetivo: req.params.id, detalle: { nombre, telefono } });
     res.json(usuario);
   } catch (err) {
     console.error(err);
@@ -462,10 +503,61 @@ router.put('/usuarios/:id', async (req, res) => {
   }
 });
 
+// Baja / reactivacion de un usuario (offboarding). Al desactivar se
+// cierran todas sus sesiones al instante.
+router.put('/usuarios/:id/activo', requiereAdmin, async (req, res) => {
+  try {
+    const activo = req.body?.activo;
+    if (typeof activo !== 'boolean') return res.status(400).json({ error: 'Falta "activo" (true/false).' });
+    if (!activo && req.params.id === req.usuario!.id) {
+      return res.status(400).json({ error: 'No puedes desactivar tu propio usuario.' });
+    }
+    const usuario = await actualizarUsuario(req.params.id, { activo });
+    const sesionesCerradas = activo ? 0 : await revocarSesionesUsuario(req.params.id);
+    await registrarEvento(req, activo ? 'usuario.reactivado' : 'usuario.desactivado', {
+      objetivo: req.params.id,
+      detalle: { sesionesCerradas },
+    });
+    res.json(usuario);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al cambiar el estado del usuario' });
+  }
+});
+
+// Bitacora de seguridad (solo administrador, solo lectura).
+router.get('/admin/bitacora', requiereAdmin, async (req, res) => {
+  try {
+    const desde = req.query.desde ? new Date(String(req.query.desde)) : undefined;
+    res.json(
+      await listarBitacora({
+        desde: desde && !isNaN(desde.getTime()) ? desde : undefined,
+        evento: req.query.evento ? String(req.query.evento) : undefined,
+        usuarioId: req.query.usuarioId ? String(req.query.usuarioId) : undefined,
+        limite: req.query.limite ? Number(req.query.limite) : undefined,
+      })
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al consultar la bitacora' });
+  }
+});
+
 router.put('/usuarios/:id/permisos', requiereAdmin, async (req, res) => {
   try {
-    const permisos = await actualizarPermisosUsuario(req.params.id, req.body);
-    res.json(permisos);
+    const b = req.body || {};
+    const permisos = await actualizarPermisosUsuario(req.params.id, {
+      puedeVerCostos: !!b.puedeVerCostos,
+      puedeRegistrarCompras: !!b.puedeRegistrarCompras,
+      puedeVerUtilidad: !!b.puedeVerUtilidad,
+      puedeVerCarteraGeneral: !!b.puedeVerCarteraGeneral,
+      puedeVerGastosTodos: !!b.puedeVerGastosTodos,
+      puedeAutorizar: !!b.puedeAutorizar,
+      puedeRegistrarPagos: !!b.puedeRegistrarPagos,
+    });
+    await registrarEvento(req, 'usuario.permisos_cambiados', { objetivo: req.params.id, detalle: b });
+    const { pin: _pin, ...usuarioSinPin } = (permisos as any).usuario ?? {};
+    res.json({ ...permisos, usuario: usuarioSinPin });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error al actualizar permisos' });
