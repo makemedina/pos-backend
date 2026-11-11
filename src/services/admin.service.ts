@@ -93,6 +93,7 @@ export async function ejecutarReset(confirmacion: string, opciones: OpcionesRese
       await tx.producto.deleteMany({});
       await tx.categoria.deleteMany({});
       await tx.categoriaGasto.deleteMany({});
+      await tx.automovil.deleteMany({});
       await tx.cliente.deleteMany({});
       await tx.proveedor.deleteMany({});
     }

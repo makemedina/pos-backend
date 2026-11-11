@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../prisma';
 import { verificarAutorizadorPorTelefono } from './auth.service';
 import { verificarSaldoBancoSuficiente, SaldoBancoInsuficienteError } from './configuracion.service';
@@ -42,11 +43,11 @@ export function puedeVerGasto(
 // la tabla esta vacia -- asi nunca se topa el usuario con un formulario
 // de gasto sin ninguna categoria para elegir (eso era justo la causa de
 // "no se pudo registrar el gasto": categoriaId llegaba vacio).
-const CATEGORIAS_DEFAULT: { nombre: string; departamento: string }[] = [
+const CATEGORIAS_DEFAULT: { nombre: string; departamento: string; usoAutomovil?: UsoAutomovil }[] = [
   { nombre: 'Renta', departamento: 'Operativos' },
   { nombre: 'Servicios (luz, agua, gas, internet)', departamento: 'Operativos' },
-  { nombre: 'Mantenimiento y reparaciones', departamento: 'Operativos' },
-  { nombre: 'Transporte y combustible', departamento: 'Operativos' },
+  { nombre: 'Mantenimiento y reparaciones', departamento: 'Operativos', usoAutomovil: 'opcional' },
+  { nombre: 'Transporte y combustible', departamento: 'Operativos', usoAutomovil: 'obligatorio' },
   { nombre: 'Sueldos y nomina', departamento: 'Recursos Humanos' },
   { nombre: 'Papeleria e insumos de oficina', departamento: 'Administrativos' },
   { nombre: 'Publicidad y marketing', departamento: 'Administrativos' },
@@ -72,6 +73,27 @@ export async function listarCategoriasGasto() {
 
   return prisma.categoriaGasto.findMany({
     orderBy: [{ departamento: 'asc' }, { nombre: 'asc' }],
+    include: { _count: { select: { gastos: true } } },
+  });
+}
+
+/**
+ * Renombra una subcategoria, la cambia de categoria (departamento) o la
+ * oculta/muestra. No se borran: los gastos ya registrados las usan.
+ */
+export async function actualizarCategoriaGasto(
+  id: string,
+  cambios: { nombre?: string; departamento?: string; activa?: boolean; usoAutomovil?: UsoAutomovil }
+) {
+  return prisma.categoriaGasto.update({
+    where: { id },
+    data: {
+      ...(cambios.nombre !== undefined ? { nombre: cambios.nombre } : {}),
+      ...(cambios.departamento !== undefined ? { departamento: cambios.departamento } : {}),
+      ...(cambios.activa !== undefined ? { activa: cambios.activa } : {}),
+      ...(cambios.usoAutomovil !== undefined ? { usoAutomovil: cambios.usoAutomovil } : {}),
+    },
+    include: { _count: { select: { gastos: true } } },
   });
 }
 
@@ -81,13 +103,73 @@ export async function crearCategoriaGasto(nombre: string, departamento: string) 
   });
 }
 
+// ---------- AUTOMOVILES ----------
+
+export const USOS_AUTOMOVIL = ['no', 'opcional', 'obligatorio'] as const;
+export type UsoAutomovil = (typeof USOS_AUTOMOVIL)[number];
+
+export async function listarAutomoviles() {
+  return prisma.automovil.findMany({
+    orderBy: [{ activo: 'desc' }, { nombre: 'asc' }],
+    include: { _count: { select: { gastos: true } } },
+  });
+}
+
+export async function crearAutomovil(nombre: string, placas?: string) {
+  return prisma.automovil.create({
+    data: { nombre, placas: placas || null },
+    include: { _count: { select: { gastos: true } } },
+  });
+}
+
+export async function actualizarAutomovil(
+  id: string,
+  cambios: { nombre?: string; placas?: string | null; activo?: boolean }
+) {
+  return prisma.automovil.update({
+    where: { id },
+    data: {
+      ...(cambios.nombre !== undefined ? { nombre: cambios.nombre } : {}),
+      ...(cambios.placas !== undefined ? { placas: cambios.placas || null } : {}),
+      ...(cambios.activo !== undefined ? { activo: cambios.activo } : {}),
+    },
+    include: { _count: { select: { gastos: true } } },
+  });
+}
+
+export class AutomovilRequeridoError extends Error {
+  constructor() {
+    super('Elige el automóvil al que corresponde este gasto.');
+  }
+}
+
+/**
+ * Segun la subcategoria: "obligatorio" exige automovil, "opcional" lo
+ * acepta si viene, "no" lo ignora (null) para no dejar automoviles
+ * colgados en gastos de otras subcategorias.
+ */
+async function automovilParaCategoria(
+  tx: Prisma.TransactionClient,
+  categoriaId: string,
+  automovilId: string | null | undefined
+) {
+  const categoria = await tx.categoriaGasto.findUniqueOrThrow({ where: { id: categoriaId } });
+  if (categoria.usoAutomovil === 'obligatorio') {
+    if (!automovilId) throw new AutomovilRequeridoError();
+    return automovilId;
+  }
+  if (categoria.usoAutomovil === 'opcional') return automovilId || null;
+  return null;
+}
+
 export interface FiltrosHistorialGastos {
   periodo?: string; // dia | ayer | antier | semana | semana_pasada | hace_2_semanas | hace_3_semanas | mes | anio | rango | todos
   desde?: string;
   hasta?: string;
   categoriaId?: string;
   proveedorId?: string;
-  metodoPago?: string; // efectivo | transferencia
+  metodoPago?: string; // efectivo | transferencia | tarjeta
+  automovilId?: string;
 }
 
 // Semana calendario de lunes a domingo, "semanasAtras" semanas atras de
@@ -225,8 +307,9 @@ export async function listarGastos(
       ...(filtros.categoriaId ? { categoriaId: filtros.categoriaId } : {}),
       ...(filtros.proveedorId ? { proveedorId: filtros.proveedorId } : {}),
       ...(filtros.metodoPago ? { metodoPago: filtros.metodoPago } : {}),
+      ...(filtros.automovilId ? { automovilId: filtros.automovilId } : {}),
     },
-    include: { categoria: true, registradoPor: true, proveedor: true },
+    include: { categoria: true, registradoPor: true, proveedor: true, automovil: true },
     orderBy: { fecha: 'desc' },
   });
 }
@@ -240,6 +323,7 @@ export async function crearGasto(input: {
   categoriaId: string;
   registradoPorId: string;
   proveedorId?: string;
+  automovilId?: string;
   concepto: string;
   monto: number;
   metodoPago: string;
@@ -254,9 +338,10 @@ export async function crearGasto(input: {
       await verificarSaldoBancoSuficiente(tx, input.monto);
     }
 
+    const automovilId = await automovilParaCategoria(tx, input.categoriaId, input.automovilId);
     const gasto = await tx.gasto.create({
-      data: input,
-      include: { categoria: true, registradoPor: true, proveedor: true },
+      data: { ...input, automovilId },
+      include: { categoria: true, registradoPor: true, proveedor: true, automovil: true },
     });
 
     if (saleDelBanco(input.metodoPago)) {
@@ -355,7 +440,7 @@ export async function cancelarGasto(
 
     const gasto = await tx.gasto.findUniqueOrThrow({
       where: { id: gastoId },
-      include: { categoria: true, registradoPor: true, proveedor: true },
+      include: { categoria: true, registradoPor: true, proveedor: true, automovil: true },
     });
 
     // Cancelar excluye el gasto del gastosDia del dia -- si ese dia ya
@@ -378,6 +463,7 @@ export async function actualizarGasto(
   cambios: {
     categoriaId?: string;
     proveedorId?: string | null;
+    automovilId?: string | null;
     concepto?: string;
     monto?: number;
     metodoPago?: string;
@@ -438,9 +524,21 @@ export async function actualizarGasto(
       }
     }
 
+    // Se revisa el automovil cuando cambia la subcategoria o el automovil:
+    // la subcategoria final decide si hace falta.
+    const revisarAutomovil = cambios.categoriaId !== undefined || cambios.automovilId !== undefined;
+    const automovilId = revisarAutomovil
+      ? await automovilParaCategoria(
+          tx,
+          cambios.categoriaId ?? actual.categoriaId,
+          cambios.automovilId !== undefined ? cambios.automovilId : actual.automovilId
+        )
+      : undefined;
+
     const gasto = await tx.gasto.update({
       where: { id: gastoId },
       data: {
+        ...(automovilId !== undefined ? { automovilId } : {}),
         ...(cambios.categoriaId !== undefined ? { categoriaId: cambios.categoriaId } : {}),
         ...(cambios.proveedorId !== undefined ? { proveedorId: cambios.proveedorId || null } : {}),
         ...(cambios.concepto !== undefined ? { concepto: cambios.concepto } : {}),
@@ -448,7 +546,7 @@ export async function actualizarGasto(
         ...(cambios.metodoPago !== undefined ? { metodoPago: cambios.metodoPago } : {}),
         ...(cambios.fecha !== undefined ? { fecha: cambios.fecha } : {}),
       },
-      include: { categoria: true, registradoPor: true, proveedor: true },
+      include: { categoria: true, registradoPor: true, proveedor: true, automovil: true },
     });
 
     // El monto, metodo de pago o dia del gasto pudieron cambiar -- si el

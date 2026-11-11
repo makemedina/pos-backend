@@ -108,6 +108,12 @@ import {
 import multer from 'multer';
 import {
   crearCategoriaGasto,
+  actualizarCategoriaGasto,
+  listarAutomoviles,
+  crearAutomovil,
+  actualizarAutomovil,
+  AutomovilRequeridoError,
+  USOS_AUTOMOVIL,
   crearGasto,
   actualizarGasto,
   listarCategoriasGasto,
@@ -586,9 +592,89 @@ router.post('/gastos/categorias', async (req, res) => {
   }
 });
 
+router.put('/gastos/categorias/:id', requiereAdmin, async (req, res) => {
+  try {
+    const { nombre, departamento, activa, usoAutomovil } = req.body;
+    if (nombre !== undefined && (typeof nombre !== 'string' || !nombre.trim())) {
+      return res.status(400).json({ error: 'El nombre de la subcategoría no puede ir vacío.' });
+    }
+    if (departamento !== undefined && (typeof departamento !== 'string' || !departamento.trim())) {
+      return res.status(400).json({ error: 'Elige una categoría.' });
+    }
+    if (activa !== undefined && typeof activa !== 'boolean') {
+      return res.status(400).json({ error: 'Valor inválido para activa.' });
+    }
+    if (usoAutomovil !== undefined && !USOS_AUTOMOVIL.includes(usoAutomovil)) {
+      return res.status(400).json({ error: 'Valor inválido para usoAutomovil.' });
+    }
+    const categoria = await actualizarCategoriaGasto(String(req.params.id), {
+      nombre: nombre?.trim(),
+      departamento: departamento?.trim(),
+      activa,
+      usoAutomovil,
+    });
+    res.json(categoria);
+  } catch (err: any) {
+    if (err?.code === 'P2025') {
+      return res.status(404).json({ error: 'Esa subcategoría ya no existe.' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar la subcategoría' });
+  }
+});
+
+// Automoviles: cualquiera los lista (para elegir al registrar un gasto de
+// transporte); solo el administrador los agrega o edita.
+router.get('/automoviles', async (_req, res) => {
+  try {
+    res.json(await listarAutomoviles());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar automóviles' });
+  }
+});
+
+router.post('/automoviles', requiereAdmin, async (req, res) => {
+  try {
+    const { nombre, placas } = req.body || {};
+    if (typeof nombre !== 'string' || !nombre.trim()) {
+      return res.status(400).json({ error: 'Escribe el nombre del automóvil.' });
+    }
+    const automovil = await crearAutomovil(nombre.trim(), typeof placas === 'string' ? placas.trim() : undefined);
+    res.status(201).json(automovil);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al agregar el automóvil' });
+  }
+});
+
+router.put('/automoviles/:id', requiereAdmin, async (req, res) => {
+  try {
+    const { nombre, placas, activo } = req.body || {};
+    if (nombre !== undefined && (typeof nombre !== 'string' || !nombre.trim())) {
+      return res.status(400).json({ error: 'El nombre del automóvil no puede ir vacío.' });
+    }
+    if (activo !== undefined && typeof activo !== 'boolean') {
+      return res.status(400).json({ error: 'Valor inválido para activo.' });
+    }
+    const automovil = await actualizarAutomovil(String(req.params.id), {
+      nombre: nombre?.trim(),
+      placas: typeof placas === 'string' ? placas.trim() : placas === null ? null : undefined,
+      activo,
+    });
+    res.json(automovil);
+  } catch (err: any) {
+    if (err?.code === 'P2025') {
+      return res.status(404).json({ error: 'Ese automóvil ya no existe.' });
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar el automóvil' });
+  }
+});
+
 router.get('/gastos', async (req, res) => {
   try {
-    const { periodo, desde, hasta, categoriaId, proveedorId, metodoPago } = req.query;
+    const { periodo, desde, hasta, categoriaId, proveedorId, metodoPago, automovilId } = req.query;
     const gastos = await listarGastos(req.usuario!, {
       periodo: periodo as string | undefined,
       desde: desde as string | undefined,
@@ -596,6 +682,7 @@ router.get('/gastos', async (req, res) => {
       categoriaId: categoriaId as string | undefined,
       proveedorId: proveedorId as string | undefined,
       metodoPago: metodoPago as string | undefined,
+      automovilId: automovilId as string | undefined,
     });
     res.json(gastos);
   } catch (err) {
@@ -621,6 +708,7 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
     const { gasto, corteRecalculado } = await crearGasto({
       categoriaId: req.body.categoriaId,
       proveedorId: req.body.proveedorId || undefined,
+      automovilId: req.body.automovilId || undefined,
       concepto: req.body.concepto,
       monto: Number(req.body.monto),
       metodoPago: req.body.metodoPago,
@@ -632,6 +720,9 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
   } catch (err) {
     if (err instanceof SaldoBancoInsuficienteError) {
       return res.status(400).json({ error: err.message, code: 'SALDO_BANCO_INSUFICIENTE' });
+    }
+    if (err instanceof AutomovilRequeridoError) {
+      return res.status(400).json({ error: err.message, code: 'AUTOMOVIL_REQUERIDO' });
     }
     if (err instanceof TipoFotoInvalidoError) {
       return res.status(400).json({ error: err.message, code: 'FOTO_INVALIDA' });
@@ -676,10 +767,11 @@ router.get('/gastos/:id/comprobante', async (req, res) => {
 // administradores -- cualquier otro usuario solo puede cancelarlo.
 router.put('/gastos/:id', requiereAdmin, async (req, res) => {
   try {
-    const { categoriaId, proveedorId, concepto, monto, metodoPago, fecha } = req.body || {};
+    const { categoriaId, proveedorId, automovilId, concepto, monto, metodoPago, fecha } = req.body || {};
     const { gasto, cortesRecalculados } = await actualizarGasto(req.params.id, {
       ...(categoriaId !== undefined ? { categoriaId } : {}),
       ...(proveedorId !== undefined ? { proveedorId: proveedorId || null } : {}),
+      ...(automovilId !== undefined ? { automovilId: automovilId || null } : {}),
       ...(concepto !== undefined ? { concepto } : {}),
       ...(monto !== undefined ? { monto: Number(monto) } : {}),
       ...(metodoPago !== undefined ? { metodoPago } : {}),
@@ -687,6 +779,9 @@ router.put('/gastos/:id', requiereAdmin, async (req, res) => {
     });
     res.json({ ...gasto, cortesRecalculados });
   } catch (err) {
+    if (err instanceof AutomovilRequeridoError) {
+      return res.status(400).json({ error: err.message, code: 'AUTOMOVIL_REQUERIDO' });
+    }
     if (err instanceof GastoYaCanceladoError) {
       return res.status(409).json({ error: err.message, code: 'GASTO_YA_CANCELADO' });
     }

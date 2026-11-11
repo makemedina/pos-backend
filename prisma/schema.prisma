@@ -522,9 +522,28 @@ model AjusteInventario {
 
 model CategoriaGasto {
   id           String  @id @default(uuid())
+  // Subcategoria del gasto (ej. "Renta"); departamento es la categoria
+  // principal (Administrativos, Operativos, Financieros, Recursos Humanos).
   nombre       String
   departamento String
+  // Las que ya no se usan se ocultan en vez de borrarse: los gastos
+  // registrados siguen apuntando a ellas.
+  activa       Boolean @default(true)
+  // Si al registrar un gasto en esta subcategoria se pide el automovil:
+  // "no", "opcional" (ej. Mantenimiento y reparaciones) u "obligatorio"
+  // (ej. Transporte y combustible).
+  usoAutomovil String  @default("no")
   gastos       Gasto[]
+}
+
+// Vehiculos del negocio, para asignarles los gastos de transporte y
+// combustible. Se ocultan (activo = false) en vez de borrarse.
+model Automovil {
+  id     String  @id @default(uuid())
+  nombre String
+  placas String?
+  activo Boolean @default(true)
+  gastos Gasto[]
 }
 
 model Gasto {
@@ -533,6 +552,8 @@ model Gasto {
   categoria          CategoriaGasto @relation(fields: [categoriaId], references: [id])
   proveedorId        String?
   proveedor          Proveedor?     @relation(fields: [proveedorId], references: [id])
+  automovilId        String?
+  automovil          Automovil?     @relation(fields: [automovilId], references: [id])
   registradoPorId    String
   registradoPor      Usuario        @relation("RegistraGasto", fields: [registradoPorId], references: [id])
   concepto           String
@@ -553,6 +574,7 @@ model Gasto {
 
   @@index([fecha])
   @@index([categoriaId])
+  @@index([automovilId])
   @@index([registradoPorId])
 }
 
