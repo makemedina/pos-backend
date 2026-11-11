@@ -32,7 +32,7 @@ Este documento no es una certificación. SOC 2 requiere una auditoría de un CPA
 | Validación de entrada | JSON máx. 5 MB, archivos máx. 8 MB, tipos de imagen validados, permisos y rol validados en el servidor | CC8.1 | A.8.28 |
 | Webhook firmado | `/webhooks/whatsapp` valida `X-Hub-Signature-256` con `timingSafeEqual` | CC6.6 | A.8.20 |
 | Cifrado de secretos en base | Token de WhatsApp cifrado con AES-GCM | C1.1 | A.8.24 |
-| Base sin superusuario | La app se conecta con un rol sin `SUPERUSER`/`CREATEROLE` (`prisma/sql/crear-rol-app.sql`) | CC6.3 | A.8.2, A.8.18 |
+| Base sin superusuario | Culiacán y Tijuana se conectan con `pos_app`, sin `SUPERUSER`/`CREATEROLE` (`prisma/sql/crear-rol-app.sql`) | CC6.3 | A.8.2, A.8.18 |
 | Base no expuesta | Postgres sin proxy TCP público | CC6.6 | A.8.20, A.8.22 |
 | Respaldos | `pg_dump` diario a R2 + respaldo automático antes de reset/restauración; restaurar exige escribir `RESTAURAR` | A1.2, A1.3 | A.8.13 |
 | Integridad de dinero | Cancelaciones idempotentes, bloqueo de lotes (`FOR UPDATE`), idempotencia de ventas offline | PI1.3 | A.8.28 |
@@ -46,7 +46,7 @@ Este documento no es una certificación. SOC 2 requiere una auditoría de un CPA
 Ordenados por riesgo.
 
 1. **2FA en las consolas** (no es código): GitHub, Railway, Cloudflare, Meta Business y la cuenta de Google de `contacto@mrcarnes.com`. Es el control con más impacto: quien entra a Railway tiene la base completa. — CC6.1 / A.5.17, A.8.5
-2. **Rotar contraseñas de Postgres y llaves VAPID** pendientes del incidente de Railway del 2026-10-21. — CC7.4 / A.5.26
+2. ~~Rotar contraseñas de Postgres y llaves VAPID~~ — hecho el 2026-11-11: los dos backends entran con `pos_app` (sin superusuario), la contraseña de `postgres` se cambió en ambas bases y las llaves VAPID de Culiacán son nuevas (Tijuana no usa push). — CC7.4 / A.5.26
 3. **Prueba de restauración trimestral**: restaurar el último respaldo en una base aparte y anotar fecha, duración y resultado. Un respaldo que nunca se restauró no cuenta como control. — A1.3 / A.8.13
 4. **Cifrar los respaldos** antes de subirlos a R2 (p. ej. `age` o `gpg` con llave fuera de R2), y política de retención en el bucket (lifecycle). — C1.1 / A.8.24
 5. **Pantalla de bitácora** en el frontend (el endpoint ya existe) y alerta push al admin ante: login bloqueado, usuario creado, permisos cambiados, restauración. — CC7.2, CC7.3 / A.8.16
