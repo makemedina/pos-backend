@@ -58,6 +58,12 @@ const CATEGORIAS_DEFAULT: { nombre: string; departamento: string }[] = [
   { nombre: 'Otros gastos', departamento: 'Administrativos' },
 ];
 
+// Transferencia y tarjeta (de debito, de la cuenta del negocio) salen
+// del saldo de banco; efectivo sale de caja.
+function saleDelBanco(metodoPago: string) {
+  return metodoPago === 'transferencia' || metodoPago === 'tarjeta';
+}
+
 export async function listarCategoriasGasto() {
   const existentes = await prisma.categoriaGasto.count();
   if (existentes === 0) {
@@ -244,7 +250,7 @@ export async function crearGasto(input: {
   fecha?: Date;
 }) {
   return prisma.$transaction(async (tx) => {
-    if (input.metodoPago === 'transferencia') {
+    if (saleDelBanco(input.metodoPago)) {
       await verificarSaldoBancoSuficiente(tx, input.monto);
     }
 
@@ -253,7 +259,7 @@ export async function crearGasto(input: {
       include: { categoria: true, registradoPor: true, proveedor: true },
     });
 
-    if (input.metodoPago === 'transferencia') {
+    if (saleDelBanco(input.metodoPago)) {
       await tx.configuracion.upsert({
         where: { id: 'singleton' },
         update: { saldoBancoActual: { decrement: input.monto } },
@@ -333,7 +339,7 @@ export async function cancelarGasto(
     });
     if (marcado.count === 0) throw new GastoYaCanceladoError();
 
-    if (gastoActual.metodoPago === 'transferencia') {
+    if (saleDelBanco(gastoActual.metodoPago)) {
       await tx.configuracion.upsert({
         where: { id: 'singleton' },
         update: { saldoBancoActual: { increment: Number(gastoActual.monto) } },
@@ -390,20 +396,20 @@ export async function actualizarGasto(
     const cambioAfectaSaldos = montoNuevo !== montoAnterior || metodoNuevo !== actual.metodoPago;
 
     if (cambioAfectaSaldos) {
-      if (metodoNuevo === 'transferencia') {
+      if (saleDelBanco(metodoNuevo)) {
         // El saldo de banco ya trae descontado el monto anterior si el
         // metodo anterior tambien era transferencia -- se lo regresamos
         // antes de validar, para no rechazar un ajuste que en realidad
         // no aumenta lo comprometido.
         const saldoDisponible =
           Number((await tx.configuracion.findUnique({ where: { id: 'singleton' } }))?.saldoBancoActual ?? 0) +
-          (actual.metodoPago === 'transferencia' ? montoAnterior : 0);
+          (saleDelBanco(actual.metodoPago) ? montoAnterior : 0);
         if (montoNuevo > saldoDisponible) {
           throw new SaldoBancoInsuficienteError(montoNuevo, saldoDisponible);
         }
       }
 
-      if (actual.metodoPago === 'transferencia') {
+      if (saleDelBanco(actual.metodoPago)) {
         await tx.configuracion.upsert({
           where: { id: 'singleton' },
           update: { saldoBancoActual: { increment: montoAnterior } },
@@ -417,7 +423,7 @@ export async function actualizarGasto(
         });
       }
 
-      if (metodoNuevo === 'transferencia') {
+      if (saleDelBanco(metodoNuevo)) {
         await tx.configuracion.upsert({
           where: { id: 'singleton' },
           update: { saldoBancoActual: { decrement: montoNuevo } },

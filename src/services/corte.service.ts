@@ -83,7 +83,7 @@ function agruparFacturasPendientes(compras: CompraConProveedor[]) {
 // transferencia, y al final lo que todavia no tiene metodo de pago (a
 // credito, sin abono el dia de hoy). Dentro de cada metodo, alfabetico
 // por cliente/proveedor.
-const ORDEN_METODO_PAGO: Record<string, number> = { efectivo: 0, transferencia: 1 };
+const ORDEN_METODO_PAGO: Record<string, number> = { efectivo: 0, transferencia: 1, tarjeta: 1 };
 
 function ordenarPorMetodoYNombre<T>(
   items: T[],
@@ -104,7 +104,8 @@ function subtotalesPorMetodo<T>(items: T[], getMetodo: (item: T) => string | nul
   return items.reduce(
     (acc, item) => {
       const metodo = getMetodo(item);
-      if (metodo === 'transferencia') acc.transferencia += getMonto(item);
+      // Tarjeta (solo en gastos) sale del banco igual que transferencia.
+      if (metodo === 'transferencia' || metodo === 'tarjeta') acc.transferencia += getMonto(item);
       else if (metodo === 'efectivo') acc.efectivo += getMonto(item);
       else acc.credito += getMonto(item);
       return acc;
