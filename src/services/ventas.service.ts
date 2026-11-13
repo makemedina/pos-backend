@@ -31,6 +31,9 @@ interface CrearVentaInput {
   // vacio o ausente equivale a credito total.
   pagos?: PagoInicialInput[];
   canalTicket?: string;
+  // Cargo por servicio a domicilio que se suma al total de la nota (0 o
+  // ausente = sin servicio a domicilio).
+  cargoDomicilio?: number;
   // Id que genera el celular para una venta capturada sin conexion (ver
   // Venta.idLocal). Si ya existe una venta con este id, no se crea otra.
   idLocal?: string;
@@ -49,6 +52,12 @@ export class PrecioBajoCostoSinAutorizarError extends Error {
     super(
       `El precio ofrecido para la variante ${varianteId} esta por debajo del costo y no tiene autorizacion`
     );
+  }
+}
+
+export class CargoDomicilioInvalidoError extends Error {
+  constructor() {
+    super('El importe del servicio a domicilio debe ser un numero mayor o igual a cero.');
   }
 }
 
@@ -103,6 +112,11 @@ async function ventaYaSubida(idLocal: string) {
  * la misma transaccion (todo o nada).
  */
 export async function crearVentaEnTx(tx: Prisma.TransactionClient, input: CrearVentaInput) {
+  const cargoDomicilio = redondearCentavos(Number(input.cargoDomicilio ?? 0));
+  if (!Number.isFinite(cargoDomicilio) || cargoDomicilio < 0) {
+    throw new CargoDomicilioInvalidoError();
+  }
+
   if (input.esCredito) {
     const cliente = await tx.cliente.findUniqueOrThrow({ where: { id: input.clienteId } });
     if (!cliente.permiteVentaCredito) {
@@ -213,7 +227,10 @@ export async function crearVentaEnTx(tx: Prisma.TransactionClient, input: CrearV
     }
   }
 
-  total = redondearCentavos(total);
+  // El servicio a domicilio se cobra en la misma nota. Los pagos se
+  // reparten solo entre los productos (restantePorItem), asi que la parte
+  // del domicilio no cuenta como utilidad de producto.
+  total = redondearCentavos(total + cargoDomicilio);
 
   const pagosValidos = (input.pagos ?? []).filter((p) => p.monto > 0);
   const montoPagadoAhora = redondearCentavos(
@@ -233,6 +250,7 @@ export async function crearVentaEnTx(tx: Prisma.TransactionClient, input: CrearV
       vendedorId: input.vendedorId,
       clienteId: input.clienteId,
       total,
+      cargoDomicilio,
       saldoPendiente,
       esCredito: input.esCredito,
       estadoPago,

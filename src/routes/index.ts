@@ -8,6 +8,7 @@ import {
   StockInsuficienteError,
   PrecioBajoCostoSinAutorizarError,
   ClienteSinCreditoError,
+  CargoDomicilioInvalidoError,
   cancelarVenta,
   VentaYaCanceladaError,
   AutorizacionCancelacionInvalidaError,
@@ -1182,6 +1183,9 @@ router.post('/ventas', async (req, res) => {
     if (err instanceof PrecioBajoCostoSinAutorizarError) {
       return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
     }
+    if (err instanceof CargoDomicilioInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'CARGO_DOMICILIO_INVALIDO' });
+    }
     if (err instanceof ClienteSinCreditoError) {
       return res.status(403).json({ error: err.message, code: 'CLIENTE_SIN_CREDITO' });
     }
@@ -1241,6 +1245,9 @@ router.post('/cotizaciones/:id/confirmar', async (req, res) => {
     }
     if (err instanceof PrecioBajoCostoSinAutorizarError) {
       return res.status(403).json({ error: err.message, code: 'REQUIERE_AUTORIZACION' });
+    }
+    if (err instanceof CargoDomicilioInvalidoError) {
+      return res.status(400).json({ error: err.message, code: 'CARGO_DOMICILIO_INVALIDO' });
     }
     if (err instanceof ClienteSinCreditoError) {
       return res.status(403).json({ error: err.message, code: 'CLIENTE_SIN_CREDITO' });

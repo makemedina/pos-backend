@@ -154,6 +154,7 @@ export async function confirmarCotizacion(
     autorizadoPorTelefono?: string;
     autorizadoPin?: string;
     motivoAutorizacion?: string;
+    cargoDomicilio?: number;
   }
 ) {
   const cotizacion = await prisma.cotizacion.findUniqueOrThrow({
@@ -176,6 +177,7 @@ export async function confirmarCotizacion(
       clienteId: cotizacion.clienteId,
       esCredito: datos.esCredito,
       pagos: datos.pagos,
+      cargoDomicilio: datos.cargoDomicilio,
       items: cotizacion.items.map((i) => ({
         varianteId: i.varianteId,
         cantidad: Number(i.cantidad),

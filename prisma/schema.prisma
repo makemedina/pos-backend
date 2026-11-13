@@ -371,6 +371,9 @@ model Venta {
   cliente         Cliente   @relation(fields: [clienteId], references: [id])
   fecha           DateTime  @default(now())
   total           Decimal   @db.Decimal(12, 2)
+  // Cargo por servicio a domicilio; ya viene sumado en total. No tiene
+  // VentaItem (no es producto), asi que no entra en la utilidad.
+  cargoDomicilio  Decimal   @default(0) @db.Decimal(12, 2)
   saldoPendiente  Decimal   @db.Decimal(12, 2)
   esCredito       Boolean   @default(false)
   estadoPago      String    @default("pendiente") // pendiente | parcial | pagada

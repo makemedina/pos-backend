@@ -220,6 +220,7 @@ export async function obtenerDetalleVenta(ventaId: string) {
     folio: venta.folio,
     fecha: venta.fecha,
     total: Number(venta.total),
+    cargoDomicilio: Number(venta.cargoDomicilio),
     saldoPendiente: Number(venta.saldoPendiente),
     esCredito: venta.esCredito,
     estadoPago: venta.estadoPago,
