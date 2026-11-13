@@ -125,6 +125,7 @@ import {
   descargarFotoComprobanteGasto,
   obtenerGastoPorId,
   puedeVerGasto,
+  proveedoresUsadosEnGastos,
 } from '../services/gastos.service';
 import { TipoFotoInvalidoError } from '../services/imagenesR2.service';
 
@@ -672,6 +673,16 @@ router.put('/automoviles/:id', requiereAdmin, async (req, res) => {
   }
 });
 
+// Sugerencias del buscador de proveedor al capturar un gasto.
+router.get('/gastos/proveedores-usados', async (_req, res) => {
+  try {
+    res.json(await proveedoresUsadosEnGastos());
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al listar los proveedores usados en gastos' });
+  }
+});
+
 router.get('/gastos', async (req, res) => {
   try {
     const { periodo, desde, hasta, categoriaId, proveedorId, metodoPago, automovilId } = req.query;
@@ -696,6 +707,9 @@ router.get('/gastos', async (req, res) => {
 // comprobante es obligatoria para registrar un gasto.
 router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
   try {
+    if (!req.body.proveedorId) {
+      return res.status(400).json({ error: 'Elige el proveedor del gasto.', code: 'PROVEEDOR_REQUERIDO' });
+    }
     if (!req.file) {
       return res.status(400).json({ error: 'Falta la foto del comprobante.', code: 'FOTO_REQUERIDA' });
     }
@@ -707,7 +721,7 @@ router.post('/gastos', subidaComprobante.single('foto'), async (req, res) => {
     const esAdmin = req.usuario!.rolBase === 'administrador';
     const { gasto, corteRecalculado } = await crearGasto({
       categoriaId: req.body.categoriaId,
-      proveedorId: req.body.proveedorId || undefined,
+      proveedorId: req.body.proveedorId,
       automovilId: req.body.automovilId || undefined,
       concepto: req.body.concepto,
       monto: Number(req.body.monto),
@@ -768,6 +782,9 @@ router.get('/gastos/:id/comprobante', async (req, res) => {
 router.put('/gastos/:id', requiereAdmin, async (req, res) => {
   try {
     const { categoriaId, proveedorId, automovilId, concepto, monto, metodoPago, fecha } = req.body || {};
+    if (proveedorId !== undefined && !proveedorId) {
+      return res.status(400).json({ error: 'El proveedor del gasto es obligatorio.', code: 'PROVEEDOR_REQUERIDO' });
+    }
     const { gasto, cortesRecalculados } = await actualizarGasto(req.params.id, {
       ...(categoriaId !== undefined ? { categoriaId } : {}),
       ...(proveedorId !== undefined ? { proveedorId: proveedorId || null } : {}),

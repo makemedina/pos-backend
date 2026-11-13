@@ -315,14 +315,38 @@ export async function listarGastos(
 }
 
 /**
+ * Proveedores que ya se han usado en gastos (no cancelados), del mas usado
+ * al menos usado -- empate: el usado mas recientemente primero. Son las
+ * sugerencias del buscador de proveedor al capturar un gasto.
+ */
+export async function proveedoresUsadosEnGastos() {
+  const usos = await prisma.gasto.groupBy({
+    by: ['proveedorId'],
+    where: { cancelado: false, proveedorId: { not: null } },
+    _count: { _all: true },
+    _max: { fecha: true },
+  });
+  const ids = usos.map((u) => u.proveedorId!).filter(Boolean);
+  const proveedores = await prisma.proveedor.findMany({ where: { id: { in: ids } } });
+  const porId = new Map(usos.map((u) => [u.proveedorId!, u]));
+  return proveedores.sort((a, b) => {
+    const ua = porId.get(a.id)!;
+    const ub = porId.get(b.id)!;
+    if (ub._count._all !== ua._count._all) return ub._count._all - ua._count._all;
+    return (ub._max.fecha?.getTime() ?? 0) - (ua._max.fecha?.getTime() ?? 0);
+  });
+}
+
+/**
  * registradoPorId ya no viene del body: lo decide el backend a partir de
- * la sesion activa (req.usuario.id). proveedorId es opcional -- no todo
- * gasto tiene un proveedor asociado (ej. sueldos).
+ * la sesion activa (req.usuario.id). proveedorId es obligatorio para
+ * gastos nuevos (se exige en la ruta); el campo queda opcional en la base
+ * porque los gastos de antes de este cambio pueden no tenerlo.
  */
 export async function crearGasto(input: {
   categoriaId: string;
   registradoPorId: string;
-  proveedorId?: string;
+  proveedorId: string;
   automovilId?: string;
   concepto: string;
   monto: number;
