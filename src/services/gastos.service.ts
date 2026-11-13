@@ -59,10 +59,10 @@ const CATEGORIAS_DEFAULT: { nombre: string; departamento: string; usoAutomovil?:
   { nombre: 'Otros gastos', departamento: 'Administrativos' },
 ];
 
-// Transferencia y tarjeta (de debito, de la cuenta del negocio) salen
-// del saldo de banco; efectivo sale de caja.
+// Transferencia, tarjeta (de debito, de la cuenta del negocio) y cheque
+// salen del saldo de banco; efectivo sale de caja.
 function saleDelBanco(metodoPago: string) {
-  return metodoPago === 'transferencia' || metodoPago === 'tarjeta';
+  return metodoPago === 'transferencia' || metodoPago === 'tarjeta' || metodoPago === 'cheque';
 }
 
 export async function listarCategoriasGasto() {
@@ -168,7 +168,7 @@ export interface FiltrosHistorialGastos {
   hasta?: string;
   categoriaId?: string;
   proveedorId?: string;
-  metodoPago?: string; // efectivo | transferencia | tarjeta
+  metodoPago?: string; // efectivo | transferencia | tarjeta | cheque
   automovilId?: string;
 }
 
